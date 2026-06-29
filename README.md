@@ -8,6 +8,7 @@
 - Agnes 封装：Chat / Image / Video / Video Status
 - MiMo 封装：TTS / Voice Design
 - API Routes：故事生成、图片生成、视频生成、配音生成、任务创建、任务执行、任务状态
+- 可编辑审核流程：Prompt、剧本、分镜、图片都需要用户确认后才继续
 - ffmpeg 合成接口示例
 
 ## 运行
@@ -47,12 +48,38 @@ FFPROBE_PATH=ffprobe
 
 1. 进入 `/create`
 2. 输入短剧主题
-3. 推荐先使用 `30 秒 / 6 个 beat`
-4. 点击“创建 Agent 任务”
-5. 进入 `/studio/[projectId]`
-6. 先执行 `story.generate`
-7. 继续执行角色图、beat 关键帧、beat 视频、beat 旁白任务
-8. 最终由 `project.merge` 或 `/api/render/merge` 合成
+3. 修改“总导演 Prompt”；默认 Prompt 只是模板，可以直接覆盖
+4. 推荐先使用 `30 秒 / 6 个 beat`
+5. 点击“创建 Agent 任务”
+6. 进入 `/studio/[projectId]`
+7. 点击“生成/刷新剧本”执行 `story.generate`
+8. 在 Studio 里修改剧本 JSON、旁白、分镜、Image Prompt、Video Prompt
+9. 点击“确认使用当前剧本”后，才会创建图片和配音任务
+10. 执行图片任务，查看图片是否满意
+11. 图片满意后点击“确认图片生成视频”，才会创建对应视频任务
+12. 所有图片确认并生成视频后，再执行合成任务
+
+## 审核式创作流程
+
+当前版本不是全自动一路生成，而是确认式流程：
+
+```txt
+用户写 Prompt
+  ↓
+生成可编辑剧本 / narration_beats / scenes
+  ↓
+用户修改并确认剧本
+  ↓
+生成角色图、漫画关键帧、旁白
+  ↓
+用户确认图片
+  ↓
+生成对应视频
+  ↓
+合成最终成片
+```
+
+这样做的原因是：AI 生成的视频如果直接一路往后跑，容易出现剧情不连贯、旁白不匹配、图片不满意但已经继续生成视频的问题。现在每个关键阶段都可以停下来改。
 
 ## 旁白 Beat 驱动流程
 
@@ -60,26 +87,6 @@ FFPROBE_PATH=ffprobe
 
 ```txt
 一句旁白 = 一个 narration beat = 一个漫画关键帧 = 一个轻量视频片段 = 一个合成片段
-```
-
-生成链路：
-
-```txt
-Story Director
-  ↓
-生成 narration_beats
-  ↓
-每个 beat 生成对应 scene
-  ↓
-角色定稿图
-  ↓
-每个 beat 的漫画关键帧
-  ↓
-每个 beat 的轻量漫画动效
-  ↓
-每个 beat 的旁白 TTS
-  ↓
-按真实旁白音频时长合成
 ```
 
 `narration_beats` 和 `scenes` 必须一一对应：
@@ -129,6 +136,7 @@ narration_beats[1] ↔ scenes[1]
 ```txt
 app/
   api/
+    projects/review      保存剧本、确认剧本、确认图片
     story/generate       直接生成短剧 JSON
     image/generate       Agnes 图片生成
     video/generate       Agnes 视频任务创建

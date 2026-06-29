@@ -24,13 +24,49 @@ function shouldRecheckVideoStatus(task: StoredProject["tasks"][number]) {
   return !checkedAt || Date.now() - checkedAt >= STATUS_RECHECK_INTERVAL_MS;
 }
 
+function sceneIdFromImageTask(task: StoredProject["tasks"][number]) {
+  return (task.input.scene as { scene_id?: string } | undefined)?.scene_id;
+}
+
+function syncSceneMediaFromOutputs(project: StoredProject): StoredProject {
+  if (!project.plan) return project;
+  const images = new Map<string, string>();
+  const videos = new Map<string, string>();
+
+  for (const asset of project.assets) {
+    if (asset.type === "scene_image" && typeof asset.meta?.sceneId === "string") images.set(asset.meta.sceneId, asset.url);
+    if (asset.type === "scene_video" && typeof asset.meta?.sceneId === "string") videos.set(asset.meta.sceneId, asset.url);
+  }
+
+  for (const task of project.tasks) {
+    if (task.type === "scene.image.generate") {
+      const sceneId = sceneIdFromImageTask(task);
+      const imageUrl = typeof task.output?.imageUrl === "string" ? task.output.imageUrl : undefined;
+      if (sceneId && imageUrl) images.set(sceneId, imageUrl);
+    }
+    if (task.type === "scene.video.generate") {
+      const sceneId = typeof task.input.sceneId === "string" ? task.input.sceneId : undefined;
+      const videoUrl = typeof task.output?.videoUrl === "string" ? task.output.videoUrl : undefined;
+      if (sceneId && videoUrl) videos.set(sceneId, videoUrl);
+    }
+  }
+
+  project.plan.scenes = project.plan.scenes.map((scene) => ({
+    ...scene,
+    image_url: scene.image_url || images.get(scene.scene_id),
+    video_url: scene.video_url || videos.get(scene.scene_id)
+  }));
+  return project;
+}
+
 function compactProject(project: StoredProject): StoredProject {
+  const synced = syncSceneMediaFromOutputs(project);
   return {
-    ...project,
-    plan: project.plan
+    ...synced,
+    plan: synced.plan
       ? {
-          ...project.plan,
-          scenes: project.plan.scenes.map((scene) => {
+          ...synced.plan,
+          scenes: synced.plan.scenes.map((scene) => {
             // eslint-disable-next-line @typescript-eslint/no-unused-vars
             const { audio_url, ...rest } = scene;
             return rest as Omit<typeof scene, "audio_url">;

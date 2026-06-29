@@ -12,13 +12,14 @@ export const AGENTS: AgentDefinition[] = [
     id: "story_director",
     name: "短剧总导演 Agent",
     role: "负责把用户一句话主题扩展成完整动漫短剧方案。",
-    goal: "生成强钩子、快节奏、角色统一、漫画感明确、可执行的短剧 JSON。",
+    goal: "生成强钩子、快节奏、角色统一、剧情连续、漫画感明确、可执行的短剧 JSON。",
     rules: [
       "前 3 秒必须有强冲突或反转钩子。",
       "剧情必须包含压迫、反击、爽点和结尾悬念。",
       "不得复刻知名 IP、明星肖像或已有动漫角色。",
       "所有字段必须服务于后续图片、视频、配音、剪辑任务。",
-      "visual_style 和所有 image/video prompt 必须强制 2D 漫画分镜风，禁止写实、真人、3D、电影实拍感。"
+      "visual_style 和所有 image/video prompt 必须强制 2D 漫画分镜风，禁止写实、真人、3D、电影实拍感。",
+      "每个 scene 必须是上一 scene 的直接结果，必须写清 starting_state、ending_state、continuity_from_previous 和 visual_continuity_anchor。"
     ],
     outputContract: ["AnimeProjectPlan JSON", "characters[]", "scenes[]", "final_editing_plan"]
   },
@@ -41,12 +42,14 @@ export const AGENTS: AgentDefinition[] = [
     id: "scene_prompt_engineer",
     name: "分镜提示词 Agent",
     role: "负责把每个 scene 改写为文生图和图生视频 Prompt。",
-    goal: "让每幕都有明确构图、动作、镜头、光影、情绪、漫画分镜感和稳定动态。",
+    goal: "让每幕都有明确构图、动作、镜头、光影、情绪、漫画分镜感、剧情承接和稳定动态。",
     rules: [
       "image_prompt 不要出现中文对白。",
       "image_prompt 必须是 2D manga comic panel / anime cel shading / ink line art 风格。",
+      "image_prompt 必须包含上一幕 ending_state、本幕 starting_state 和 visual_continuity_anchor。",
       "video_prompt 必须从当前图片开始描述运动变化。",
       "video_prompt 必须使用 limited animation、parallax camera、subtle hair and cloth movement、speed lines 或 screentone motion 等漫画动画词。",
+      "video_prompt 必须要求最后 0.5-1 秒停在 ending_state，给下一幕作为连续性参考。",
       "每幕尽量只有一个核心动作，避免模型混乱。",
       "画幅、画风、质量词必须统一。",
       "negative prompt 必须排除 photorealistic、live action、3D render、game CG、real skin、western realism。"
@@ -61,6 +64,7 @@ export const AGENTS: AgentDefinition[] = [
     rules: [
       "角色图优先使用干净背景或中景半身。",
       "每个分镜都必须先生成漫画关键帧，再进入图生视频。",
+      "scene_002 之后的关键帧必须参考上一段视频最后一帧，不允许剧情重置。",
       "分镜图必须清晰表达动作起点。",
       "图片必须保持 2D 漫画分镜、清晰线稿、赛璐璐上色、网点纸纹。",
       "失败时最多重试 2 次，并记录错误。"
@@ -76,7 +80,7 @@ export const AGENTS: AgentDefinition[] = [
       "优先用图生视频保证角色一致。",
       "视频只能做轻量漫画动画：推拉镜头、视差、眨眼、头发衣服微动、速度线、光效微动。",
       "禁止把画面转成写实真人、3D CG、游戏过场或电影实拍。",
-      "每段视频保留足够结尾静帧，方便转场。",
+      "每段视频必须停在 ending_state 并保留足够结尾静帧，方便下一幕关键帧继续参考。",
       "异步任务必须保存 task_id 并轮询状态。"
     ],
     outputContract: ["task_id", "video_url", "status"]

@@ -9,10 +9,13 @@ function mimoHeaders() {
 }
 
 type MiMoResponse = {
+  audio?: { url?: string; data?: string; format?: string };
+  data?: Array<{ url?: string }>;
   choices?: Array<{
     message?: {
       content?: string;
       audio?: {
+        url?: string;
         data?: string;
         format?: string;
       };
@@ -25,6 +28,7 @@ export async function mimoGenerateSpeech(params: {
   styleInstruction?: string;
   voiceDesignPrompt?: string;
   useVoiceDesign?: boolean;
+  voice?: string;
   format?: "wav" | "mp3" | "pcm16";
 }) {
   const useVoiceDesign = params.useVoiceDesign ?? true;
@@ -43,14 +47,16 @@ export async function mimoGenerateSpeech(params: {
       { role: "assistant", content: params.text }
     ],
     audio: {
+      ...(useVoiceDesign ? {} : { voice: params.voice || process.env.MIMO_DEFAULT_VOICE || "mimo_default" }),
       format: params.format || "wav",
       optimize_text_preview: true
     },
     stream: false
   }, mimoHeaders());
 
-  const audio = data.choices?.[0]?.message?.audio;
+  const audio = data.choices?.[0]?.message?.audio || data.audio;
   const base64 = audio?.data;
-  if (!base64) throw new Error(`MiMo TTS 未返回 audio.data：${JSON.stringify(data)}`);
-  return { base64, format: audio?.format || params.format || "wav", raw: data };
+  const url = audio?.url || data.data?.[0]?.url;
+  if (!base64 && !url) throw new Error(`MiMo TTS 未返回 audio.url 或 audio.data：${JSON.stringify(data)}`);
+  return { base64, url, format: audio?.format || params.format || "wav", raw: data };
 }

@@ -7,9 +7,9 @@ function encodeStoragePath(path: string) {
   return path.split("/").map(encodeURIComponent).join("/");
 }
 
-export async function uploadImageToSupabase(buffer: Buffer, path: string, contentType = "image/png") {
+export async function uploadMediaToSupabase(buffer: Buffer, path: string, contentType: string) {
   if (!SUPABASE_URL || !SUPABASE_ANON_KEY || !SUPABASE_SERVICE_ROLE_KEY) {
-    throw new Error("缺少 Supabase Storage 配置，无法上传视频尾帧截图");
+    throw new Error("缺少 Supabase Storage 配置，无法上传媒体文件");
   }
 
   const encodedPath = encodeStoragePath(path);
@@ -30,4 +30,8 @@ export async function uploadImageToSupabase(buffer: Buffer, path: string, conten
   }
 
   return `${SUPABASE_URL}/storage/v1/object/public/${BUCKET_NAME}/${encodedPath}`;
+}
+
+export function uploadImageToSupabase(buffer: Buffer, path: string, contentType = "image/png") {
+  return uploadMediaToSupabase(buffer, path, contentType);
 }

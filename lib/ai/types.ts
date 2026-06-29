@@ -171,6 +171,7 @@ export type StoredProject = {
   id: string;
   input: ProjectInput;
   plan?: AnimeProjectPlan;
+  finalVideoUrl?: string;
   tasks: AgentTask[];
   assets: Array<{ id: string; type: string; url: string; meta?: Record<string, unknown> }>;
   status: "draft" | "planned" | "generating" | "done" | "failed";

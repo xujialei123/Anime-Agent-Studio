@@ -1,73 +1,51 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "node:child_process";
-import { mkdtemp, writeFile, readFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import type { AspectRatio } from "@/lib/ai/types";
+import { composeFinalVideo } from "@/lib/render/media-composer";
 
 export const runtime = "nodejs";
-export const maxDuration = 60;
+export const maxDuration = 300;
 
-async function download(url: string, filePath: string) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`下载失败 ${res.status}: ${url}`);
-  const buffer = Buffer.from(await res.arrayBuffer());
-  await writeFile(filePath, buffer);
-}
+type MergeScene = {
+  videoUrl: string;
+  audioUrl?: string;
+  duration: number;
+};
 
-function runFfmpeg(args: string[]) {
-  return new Promise<void>((resolve, reject) => {
-    const ffmpeg = spawn(process.env.FFMPEG_PATH || "ffmpeg", args);
-    let stderr = "";
-    ffmpeg.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
-    ffmpeg.on("close", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(stderr || `ffmpeg exited with code ${code}`));
-    });
-  });
+function resolveScenes(body: Record<string, unknown>) {
+  if (Array.isArray(body.scenes)) return body.scenes as MergeScene[];
+  if (Array.isArray(body.videoUrls)) {
+    const audioUrls = Array.isArray(body.audioUrls) ? body.audioUrls : [];
+    return body.videoUrls.map((videoUrl, index) => ({
+      videoUrl: String(videoUrl),
+      audioUrl: audioUrls[index] ? String(audioUrls[index]) : undefined,
+      duration: Number(body.duration || 5)
+    }));
+  }
+  return [];
 }
 
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const videoUrls = body.videoUrls as string[];
-    if (!Array.isArray(videoUrls) || videoUrls.length === 0) {
-      return NextResponse.json({ error: "缺少 videoUrls" }, { status: 400 });
+    const body = await req.json() as Record<string, unknown>;
+    const scenes = resolveScenes(body);
+    if (!scenes.length) {
+      return NextResponse.json({ error: "缺少 scenes 或 videoUrls" }, { status: 400 });
     }
 
-    const dir = await mkdtemp(join(tmpdir(), "anime-render-"));
-    const files: string[] = [];
+    const aspectRatio = (["9:16", "16:9", "1:1"].includes(String(body.aspectRatio))
+      ? String(body.aspectRatio)
+      : "9:16") as AspectRatio;
+    const finalBuffer = await composeFinalVideo(scenes, {
+      aspectRatio,
+      transitionDuration: Number(body.transitionDuration || 0.35)
+    });
 
-    for (let i = 0; i < videoUrls.length; i++) {
-      const file = join(dir, `scene-${i}.mp4`);
-      await download(videoUrls[i], file);
-      files.push(file);
-    }
-
-    const listPath = join(dir, "concat.txt");
-    await writeFile(listPath, files.map((file) => `file '${file.replace(/'/g, "'\\''")}'`).join("\n"));
-
-    const outputPath = join(dir, "final.mp4");
-    await runFfmpeg([
-      "-y",
-      "-f", "concat",
-      "-safe", "0",
-      "-i", listPath,
-      "-vf", "scale=1080:1920:force_original_aspect_ratio=decrease,pad=1080:1920:(ow-iw)/2:(oh-ih)/2,fps=30",
-      "-c:v", "libx264",
-      "-preset", "veryfast",
-      "-pix_fmt", "yuv420p",
-      "-c:a", "aac",
-      outputPath
-    ]);
-
-    const finalBuffer = await readFile(outputPath);
-    const response = new NextResponse(new Blob([new Uint8Array(finalBuffer)]), {
+    return new NextResponse(new Uint8Array(finalBuffer), {
       headers: {
         "Content-Type": "video/mp4",
         "Content-Disposition": "attachment; filename=anime-short.mp4"
       }
     });
-    return response;
   } catch (error) {
     return NextResponse.json({ error: error instanceof Error ? error.message : String(error) }, { status: 500 });
   }

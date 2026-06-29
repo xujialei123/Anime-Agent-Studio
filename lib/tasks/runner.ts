@@ -10,7 +10,8 @@ import { buildAnimeDirectorPrompt } from "@/lib/ai/prompts/anime-director";
 import { extractJson, makeId } from "@/lib/ai/json";
 import { agnesChatCompletion, agnesCreateVideo, agnesGenerateImage, agnesGetVideoStatus } from "@/lib/providers/agnes";
 import { mimoGenerateSpeech } from "@/lib/providers/mimo";
-import { uploadImageToSupabase } from "@/lib/providers/supabase-storage";
+import { uploadImageToSupabase, uploadMediaToSupabase } from "@/lib/providers/supabase-storage";
+import { combineAudioSegments, composeFinalVideo } from "@/lib/render/media-composer";
 import { getProject, saveProject, saveTask } from "@/lib/store/memory";
 import { createGenerationTasks } from "@/lib/tasks/factory";
 
@@ -29,6 +30,12 @@ function isVisualCharacter(character: Pick<AnimeCharacter, "name" | "role" | "fa
 
   const invalidValues = new Set(["", "n/a", "na", "none", "null", "无", "不适用"]);
   return !invalidValues.has(String(character.visual_keywords || "").trim().toLowerCase());
+}
+
+function audioContentType(format: string) {
+  if (format === "mp3") return "audio/mpeg";
+  if (format === "pcm16") return "audio/L16";
+  return "audio/wav";
 }
 
 async function download(url: string, filePath: string) {
@@ -467,31 +474,109 @@ export async function runOneTask(task: AgentTask) {
     if (task.type === "scene.tts.generate") {
       const sceneId = String(task.input.sceneId);
       const ttsItems = task.input.tts as VoiceSpec[];
-      const audios: Array<{ speaker: string; base64: string; format: string }> = [];
+      const narrationVoice = ttsItems.find((item) => item.type === "narrator") || ttsItems[0];
+      const narrationText = ttsItems.map((item) => item.text?.trim()).filter(Boolean).join("，");
 
-      for (const tts of ttsItems) {
+      if (!narrationVoice || !narrationText) {
+        task.output = { sceneId, skipped: true, reason: "empty_narration" };
+      } else {
         const speech = await mimoGenerateSpeech({
-          text: tts.text,
-          styleInstruction: `${tts.emotion}, ${tts.speed}, ${tts.volume}, ${tts.voiceType}`,
-          voiceDesignPrompt: tts.voiceDesignPrompt || tts.voiceType,
-          useVoiceDesign: true,
+          text: narrationText,
+          styleInstruction: `${narrationVoice.emotion}, ${narrationVoice.speed}, ${narrationVoice.volume}, natural cinematic narration`,
+          voiceDesignPrompt: narrationVoice.voiceDesignPrompt,
+          voice: narrationVoice.voiceType,
+          useVoiceDesign: Boolean(narrationVoice.voiceDesignPrompt),
           format: "wav"
         });
-        audios.push({ speaker: tts.speaker, base64: speech.base64, format: speech.format });
-      }
 
-      task.output = { audios, sceneId };
+        let audioUrl = speech.url;
+        let source = "provider_url";
+        if (!audioUrl) {
+          if (!speech.base64) throw new Error(`MiMo 未返回 ${sceneId} 的旁白音频`);
+          const audioBuffer = Buffer.from(speech.base64, "base64");
+          audioUrl = await uploadMediaToSupabase(
+            audioBuffer,
+            `audio/${project.id}/${sceneId}-narration.${speech.format === "pcm16" ? "pcm" : speech.format}`,
+            audioContentType(speech.format)
+          );
+          source = "base64_uploaded";
+        }
+
+        const targetScene = project.plan?.scenes.find((item) => item.scene_id === sceneId);
+        if (targetScene) targetScene.audio_url = audioUrl;
+        project.assets.push({
+          id: makeId("asset"),
+          type: "scene_narration",
+          url: audioUrl,
+          meta: { sceneId, speaker: "旁白", text: narrationText }
+        });
+        saveProject(project);
+        task.output = {
+          sceneId,
+          audioUrl,
+          format: speech.format,
+          source,
+          speaker: "旁白",
+          text: narrationText
+        };
+      }
     }
 
     if (task.type === "project.merge") {
-      const videos = project.plan?.scenes.map((scene) => scene.video_url).filter(Boolean) || [];
-      const audios = project.plan?.scenes.map((scene) => scene.audio_url).filter(Boolean) || [];
+      if (!project.plan) throw new Error("项目缺少分镜方案，无法合成");
+      const missingVideo = project.plan.scenes.find((scene) => !scene.video_url);
+      if (missingVideo) throw new Error(`${missingVideo.scene_id} 缺少视频，无法合成最终成片`);
+
+      for (const scene of project.plan.scenes) {
+        if (scene.audio_url) continue;
+        const ttsTask = project.tasks.find((item) =>
+          item.type === "scene.tts.generate" && String(item.input.sceneId) === scene.scene_id
+        );
+        const outputAudioUrl = typeof ttsTask?.output?.audioUrl === "string" ? ttsTask.output.audioUrl : undefined;
+        if (outputAudioUrl) {
+          scene.audio_url = outputAudioUrl;
+          continue;
+        }
+
+        const legacyAudios = Array.isArray(ttsTask?.output?.audios)
+          ? ttsTask.output.audios as Array<{ base64?: string; format?: string }>
+          : [];
+        const segments = legacyAudios
+          .filter((audio): audio is { base64: string; format?: string } => Boolean(audio.base64))
+          .map((audio) => ({ buffer: Buffer.from(audio.base64, "base64"), format: audio.format || "wav" }));
+        if (segments.length) {
+          const narrationBuffer = await combineAudioSegments(segments);
+          scene.audio_url = await uploadMediaToSupabase(
+            narrationBuffer,
+            `audio/${project.id}/${scene.scene_id}-narration.wav`,
+            "audio/wav"
+          );
+        }
+      }
+      saveProject(project);
+
+      const renderScenes = project.plan.scenes.map((scene) => ({
+        videoUrl: scene.video_url as string,
+        audioUrl: scene.audio_url,
+        duration: scene.duration_seconds
+      }));
+      const finalBuffer = await composeFinalVideo(renderScenes, {
+        aspectRatio: project.plan.project.aspect_ratio,
+        transitionDuration: 0.35
+      });
+      const finalVideoUrl = await uploadMediaToSupabase(
+        finalBuffer,
+        `renders/${project.id}/final.mp4`,
+        "video/mp4"
+      );
+
+      project.finalVideoUrl = finalVideoUrl;
+      project.assets.push({ id: makeId("asset"), type: "final_video", url: finalVideoUrl });
       task.output = {
-        finalVideoUrl: videos[0] || null,
+        finalVideoUrl,
         renderPlan: task.input.editingPlan,
-        videos,
-        audios,
-        note: "Demo 版未执行 ffmpeg 合成；生产环境请接入 /api/render/merge 或独立 Worker。"
+        sceneCount: renderScenes.length,
+        narrationCount: renderScenes.filter((scene) => scene.audioUrl).length
       };
       project.status = "done";
       saveProject(project);

@@ -120,6 +120,18 @@ export default function StudioPage() {
             </div>
           </div>
 
+          {project?.finalVideoUrl ? (
+            <a
+              href={project.finalVideoUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="mb-4 inline-flex items-center justify-center gap-2 rounded-2xl border border-emerald-400/30 bg-emerald-400/10 px-4 py-3 text-sm font-semibold text-emerald-200 transition hover:bg-emerald-400/15"
+            >
+              <Video className="h-4 w-4" />
+              查看最终成片
+            </a>
+          ) : null}
+
           <Button onClick={() => run()} disabled={loading || !project} className="mb-4 gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             执行可运行任务

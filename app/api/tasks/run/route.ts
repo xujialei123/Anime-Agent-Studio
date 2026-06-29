@@ -19,26 +19,40 @@ function assertTaskAllowed(taskId: string) {
   return task;
 }
 
+function findRunnableStoryTask(projectId: string) {
+  const project = getProject(projectId);
+  return [...project.tasks]
+    .reverse()
+    .find((task) => task.type === "story.generate" && ["pending", "failed"].includes(task.status));
+}
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     if (body.taskId) {
       const task = assertTaskAllowed(String(body.taskId));
       const result = await runOneTask(task);
-      return NextResponse.json({ task: result });
+      return NextResponse.json({ task: result, project: getProject(result.projectId) });
     }
 
     if (body.projectId) {
-      const project = getProject(String(body.projectId));
-      if (!project.planApprovedAt) {
-        const storyTask = project.tasks.find((task) => task.type === "story.generate" && task.status === "pending");
+      const projectId = String(body.projectId);
+      const project = getProject(projectId);
+
+      if (!project.plan) {
+        const storyTask = findRunnableStoryTask(projectId);
         if (storyTask) {
           const task = await runOneTask(storyTask);
-          return NextResponse.json({ project: getProject(project.id), ran: 1, task });
+          return NextResponse.json({ project: getProject(projectId), ran: 1, task });
         }
+        throw new Error("当前项目没有剧本任务，请重新创建项目");
+      }
+
+      if (!project.planApprovedAt) {
         throw new Error("请先修改并确认剧本/分镜/Prompt，再继续执行可运行任务");
       }
-      const result = await runReadyTasks(String(body.projectId));
+
+      const result = await runReadyTasks(projectId);
       return NextResponse.json(result);
     }
 

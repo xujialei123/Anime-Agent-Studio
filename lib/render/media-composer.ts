@@ -10,7 +10,10 @@ import type { AspectRatio } from "@/lib/ai/types";
 type RenderScene = {
   videoUrl: string;
   audioUrl?: string;
+  /** 计划时长。合成时如果存在 audioUrl，会优先使用真实音频时长。 */
   duration: number;
+  /** 可选的上游已知音频时长，单位秒。 */
+  audioDuration?: number;
 };
 
 type AudioSegment = {
@@ -32,6 +35,29 @@ function runFfmpeg(args: string[]) {
       reject(error);
     });
     child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr || `FFmpeg 退出码：${code}`)));
+  });
+}
+
+function probeDuration(filePath: string) {
+  return new Promise<number | undefined>((resolve) => {
+    const ffprobePath = process.env.FFPROBE_PATH || (process.env.FFMPEG_PATH ? process.env.FFMPEG_PATH.replace(/ffmpeg(?:\.exe)?$/i, "ffprobe$&".replace("ffprobeffmpeg", "ffprobe")) : "ffprobe");
+    const child = spawn(ffprobePath, [
+      "-v", "error",
+      "-show_entries", "format=duration",
+      "-of", "default=noprint_wrappers=1:nokey=1",
+      filePath
+    ], { windowsHide: true });
+    let stdout = "";
+    child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+    child.on("error", () => resolve(undefined));
+    child.on("close", (code) => {
+      if (code !== 0) {
+        resolve(undefined);
+        return;
+      }
+      const value = Number(stdout.trim());
+      resolve(Number.isFinite(value) && value > 0 ? value : undefined);
+    });
   });
 }
 
@@ -95,21 +121,26 @@ export async function composeFinalVideo(
   options: { aspectRatio: AspectRatio; transitionDuration?: number }
 ) {
   if (!scenes.length) throw new Error("没有可合并的分镜");
-  const transitionDuration = Math.max(0, Math.min(options.transitionDuration ?? 0.35, 1));
+  // 旁白驱动模式默认硬切，避免 xfade/acrossfade 吃掉每句旁白的头尾导致画面和声音错位。
+  const transitionDuration = Math.max(0, Math.min(options.transitionDuration ?? 0, 0.5));
   const { width, height } = renderSize(options.aspectRatio);
   const dir = await mkdtemp(join(tmpdir(), "anime-final-render-"));
 
   try {
     const normalized: string[] = [];
+    const effectiveDurations: number[] = [];
     for (let index = 0; index < scenes.length; index++) {
       const scene = scenes[index];
       if (!scene.videoUrl) throw new Error(`第 ${index + 1} 个分镜缺少视频 URL`);
-      const duration = Math.max(1, Number(scene.duration || 5));
       const video = join(dir, `video-${index}.mp4`);
       const audio = join(dir, `audio-${index}${extname(new URL(scene.audioUrl || "file:///audio.wav").pathname) || ".wav"}`);
       const output = join(dir, `normalized-${index}.mp4`);
       await download(scene.videoUrl, video);
       if (scene.audioUrl) await download(scene.audioUrl, audio);
+
+      const probedAudioDuration = scene.audioUrl ? await probeDuration(audio) : undefined;
+      const duration = Math.max(1, Number(scene.audioDuration || probedAudioDuration || scene.duration || 5) + (scene.audioUrl ? 0.15 : 0));
+      effectiveDurations.push(duration);
 
       const args = ["-y", "-i", video];
       if (scene.audioUrl) args.push("-i", audio);
@@ -133,6 +164,18 @@ export async function composeFinalVideo(
     const finalPath = join(dir, "final.mp4");
     if (normalized.length === 1) {
       await runFfmpeg(["-y", "-i", normalized[0], "-c", "copy", "-movflags", "+faststart", finalPath]);
+    } else if (transitionDuration === 0) {
+      const listPath = join(dir, "concat.txt");
+      await writeFile(listPath, normalized.map((file) => `file '${file.replace(/'/g, "'\\''")}'`).join("\n"));
+      await runFfmpeg([
+        "-y",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", listPath,
+        "-c", "copy",
+        "-movflags", "+faststart",
+        finalPath
+      ]);
     } else {
       const args = ["-y"];
       normalized.forEach((file) => args.push("-i", file));
@@ -144,7 +187,7 @@ export async function composeFinalVideo(
 
       let videoLabel = "v0";
       let audioLabel = "a0";
-      let elapsed = Math.max(1, Number(scenes[0].duration || 5));
+      let elapsed = effectiveDurations[0] || Math.max(1, Number(scenes[0].duration || 5));
       for (let index = 1; index < normalized.length; index++) {
         const nextVideo = `vx${index}`;
         const nextAudio = `ax${index}`;
@@ -153,7 +196,7 @@ export async function composeFinalVideo(
         filters.push(`[${audioLabel}][a${index}]acrossfade=d=${transitionDuration}:c1=tri:c2=tri[${nextAudio}]`);
         videoLabel = nextVideo;
         audioLabel = nextAudio;
-        elapsed += Math.max(1, Number(scenes[index].duration || 5)) - transitionDuration;
+        elapsed += (effectiveDurations[index] || Math.max(1, Number(scenes[index].duration || 5))) - transitionDuration;
       }
 
       args.push(

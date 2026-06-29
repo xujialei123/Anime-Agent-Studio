@@ -45,6 +45,14 @@ function syncSceneImagesFromOutputs(project: StoredProject) {
   return project;
 }
 
+function rebuildReviewTasks(projectId: string) {
+  const project = getProject(projectId);
+  if (!project.plan) throw new Error("项目缺少剧本方案");
+  const storyTasks = getStoryTasks(projectId);
+  const generationTasks = createReviewGenerationTasks(project.id, project.plan);
+  return replaceProjectTasks(projectId, [...storyTasks, ...generationTasks]);
+}
+
 function ensureMergeTask(projectId: string) {
   const project = syncSceneImagesFromOutputs(getProject(projectId));
   if (!project.plan) throw new Error("项目缺少剧本方案");
@@ -126,9 +134,7 @@ export async function POST(req: NextRequest) {
       project.generationTasksCreatedAt = project.planApprovedAt;
       project.assets = [];
       saveProject(project);
-      const storyTasks = getStoryTasks(projectId);
-      const generationTasks = createReviewGenerationTasks(project.id, project.plan);
-      const updated = replaceProjectTasks(projectId, [...storyTasks, ...generationTasks]);
+      const updated = rebuildReviewTasks(projectId);
       return NextResponse.json({ project: updated });
     }
 
@@ -138,7 +144,17 @@ export async function POST(req: NextRequest) {
       if (!sceneId) return NextResponse.json({ error: "缺少 sceneId" }, { status: 400 });
       const index = project.plan.scenes.findIndex((scene) => scene.scene_id === sceneId);
       if (index < 0) throw new Error(`分镜不存在：${sceneId}`);
-      project.plan.scenes[index] = { ...project.plan.scenes[index], ...body.scene, scene_id: sceneId };
+      project.plan.scenes[index] = {
+        ...project.plan.scenes[index],
+        ...body.scene,
+        scene_id: sceneId,
+        image_url: undefined,
+        video_url: undefined,
+        audio_url: undefined,
+        image_approved: false
+      };
+      project.finalVideoUrl = undefined;
+      project.assets = project.assets.filter((asset) => asset.meta?.sceneId !== sceneId && asset.type !== "final_video");
       const beatId = project.plan.scenes[index].beat_id;
       if (beatId && project.plan.narration_beats?.length) {
         const beatIndex = project.plan.narration_beats.findIndex((beat) => beat.beat_id === beatId);
@@ -156,6 +172,7 @@ export async function POST(req: NextRequest) {
         }
       }
       saveProject(project);
+      if (project.planApprovedAt) return NextResponse.json({ project: rebuildReviewTasks(projectId) });
       return NextResponse.json({ project });
     }
 

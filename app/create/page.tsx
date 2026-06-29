@@ -9,6 +9,14 @@ import { Input, Select, Textarea } from "@/components/ui/field";
 
 const MANGA_STYLE_PRESET = "2D 日系漫画分镜，干净黑色线稿，赛璐璐上色，网点纸纹，漫画面板构图，强制非写实、非3D、非真人，旁白驱动动态漫画";
 
+const DEFAULT_DIRECTOR_PROMPT = [
+  "旁白驱动 AI 漫剧：一句旁白对应一个画面 beat，一个 beat 只推进一个信息点。",
+  "生成内容必须先让用户确认剧本、分镜、旁白和 Prompt，再继续生成图片。",
+  "图片生成后也必须让用户确认，确认后才继续生成视频。",
+  "固定系统规则只作为默认模板，用户可以在创建页覆盖和补充自己的创作要求。",
+  "画风保持 2D 日系漫画分镜、干净黑色线稿、赛璐璐上色、网点纸纹，强制非写实、非3D、非真人。"
+].join("\n");
+
 export default function CreatePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
@@ -20,7 +28,8 @@ export default function CreatePage() {
     sceneCount: 6,
     aspectRatio: "9:16",
     voiceMode: "voice_design",
-    autoRun: false
+    autoRun: false,
+    directorPrompt: DEFAULT_DIRECTOR_PROMPT
   });
 
   async function submit() {
@@ -47,7 +56,7 @@ export default function CreatePage() {
         <div className="mb-8">
           <p className="text-sm text-studio-muted">Create</p>
           <h1 className="mt-2 text-4xl font-black">创建动漫短剧</h1>
-          <p className="mt-3 text-studio-muted">输入一句主题，Agent 会自动生成旁白时间轴、角色、分镜和后续任务。</p>
+          <p className="mt-3 text-studio-muted">默认 Prompt 只是模板，你可以直接改成自己的创作要求。</p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -56,9 +65,18 @@ export default function CreatePage() {
             <Textarea
               value={form.idea}
               onChange={(e) => setForm({ ...form, idea: e.target.value })}
-              className="mt-3 min-h-56 text-base leading-7"
+              className="mt-3 min-h-44 text-base leading-7"
               placeholder="例如：生成一个废柴少年被宗门抛弃，三年后觉醒龙魂归来复仇的动漫短剧。"
             />
+
+            <label className="mt-6 block text-sm font-semibold">总导演 Prompt</label>
+            <Textarea
+              value={form.directorPrompt}
+              onChange={(e) => setForm({ ...form, directorPrompt: e.target.value })}
+              className="mt-3 min-h-52 text-sm leading-6"
+              placeholder={DEFAULT_DIRECTOR_PROMPT}
+            />
+            <p className="mt-2 text-xs text-studio-muted">这里可以完全改写。默认内容只作为模板，会和主题、时长、beat 数一起传给总导演 Agent。</p>
 
             <div className="mt-6 grid gap-4 md:grid-cols-2">
               <div>
@@ -125,16 +143,16 @@ export default function CreatePage() {
           </Card>
 
           <Card className="p-6">
-            <h2 className="text-lg font-bold">生成流程</h2>
+            <h2 className="text-lg font-bold">确认式流程</h2>
             <div className="mt-5 space-y-4">
               {[
-                "故事总导演生成旁白时间轴",
-                "一句旁白对应一个画面 beat",
-                "角色一致性 Agent 生成角色卡",
-                "Agnes 生成漫画关键帧",
-                "Agnes 生成轻量漫画动效",
-                "MiMo 合成每句旁白",
-                "ffmpeg 按真实旁白时长硬切合成"
+                "自己编辑总导演 Prompt",
+                "生成可编辑剧本和旁白 beat",
+                "手动修改 JSON / 分镜 Prompt / 旁白",
+                "确认剧本后才生成图片和配音",
+                "查看图片，不满意就改 Prompt 后重来",
+                "确认图片后才生成视频",
+                "全部确认后再合成最终成片"
               ].map((item, index) => (
                 <div key={item} className="flex gap-3 rounded-2xl border border-white/10 bg-white/5 p-4">
                   <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-white/10 text-xs font-bold">{index + 1}</div>

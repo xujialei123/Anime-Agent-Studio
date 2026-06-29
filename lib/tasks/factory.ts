@@ -33,7 +33,7 @@ export function createStoryTask(projectId: string, input: ProjectInput) {
   return task({
     projectId,
     type: "story.generate",
-    title: "生成故事、角色和分镜方案",
+    title: "生成故事、角色和连续分镜方案",
     agent: "story_director",
     dependsOn: [],
     input: { projectInput: input }
@@ -69,7 +69,7 @@ export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan)
     const imageTask = task({
       projectId,
       type: "scene.image.generate",
-      title: `生成漫画关键帧：${scene.scene_id}`,
+      title: index === 0 ? `生成开场漫画关键帧：${scene.scene_id}` : `承接上一幕生成漫画关键帧：${scene.scene_id}`,
       agent: "image_operator",
       dependsOn: imageDependsOn,
       input: {

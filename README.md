@@ -87,6 +87,15 @@ scene_006：悬念收尾
 
 每一幕只推进一个动作或一个信息点，避免同一幕同时要求“跑步、转身、打斗、爆炸、变身、镜头环绕”。
 
+如果发现剧情仍然跳，可以先检查每个 scene 的：
+
+```txt
+上一幕 ending_state 是否能自然接到下一幕 starting_state
+下一幕 continuity_from_previous 是否真的说明了承接关系
+是否突然换地点、换角色、换时间
+video_prompt 是否要求最后停在 ending_state
+```
+
 ## 目录说明
 
 ```txt

@@ -34,6 +34,19 @@ function sceneNarration(scene?: AnimeScene) {
   return scene?.tts?.map((item) => item.text).filter(Boolean).join("，") || "";
 }
 
+function taskBlockedReason(task: AgentTask, project: StoredProject | null) {
+  if (!project) return "项目未加载";
+  if (task.status === "running" || task.status === "generating") return "任务运行中";
+  if (task.status === "succeeded") return "任务已完成";
+  if (task.type !== "story.generate" && !project.planApprovedAt) return "先确认剧本";
+  if (task.type === "scene.video.generate") {
+    const sceneId = String(task.input.sceneId || "");
+    const scene = project.plan?.scenes.find((item) => item.scene_id === sceneId);
+    if (!scene?.image_approved) return "先确认图片";
+  }
+  return "";
+}
+
 export default function StudioPage() {
   const params = useParams<{ projectId: string }>();
   const projectId = params.projectId;
@@ -41,6 +54,7 @@ export default function StudioPage() {
   const [loading, setLoading] = useState(false);
   const [activeScene, setActiveScene] = useState(0);
   const [planJson, setPlanJson] = useState("");
+  const [planJsonDirty, setPlanJsonDirty] = useState(false);
   const [sceneDraft, setSceneDraft] = useState<Partial<AnimeScene>>({});
   const loadPromiseRef = useRef<Promise<void> | null>(null);
 
@@ -105,6 +119,7 @@ export default function StudioPage() {
   async function savePlanJson() {
     try {
       await review("update_plan", { plan: parsePlanJson() });
+      setPlanJsonDirty(false);
       alert("已保存剧本 JSON。再次修改后需要重新确认剧本。 ");
     } catch (error) {
       alert(error instanceof Error ? error.message : String(error));
@@ -114,6 +129,7 @@ export default function StudioPage() {
   async function approvePlan() {
     try {
       await review("approve_plan", { plan: parsePlanJson() });
+      setPlanJsonDirty(false);
       alert("已确认剧本。现在可以生成角色图、图片和配音。 ");
     } catch (error) {
       alert(error instanceof Error ? error.message : String(error));
@@ -126,6 +142,10 @@ export default function StudioPage() {
     const nextScene: Partial<AnimeScene> = {
       ...sceneDraft,
       scene_id: current.scene_id,
+      image_url: undefined,
+      video_url: undefined,
+      audio_url: undefined,
+      image_approved: false,
       tts: [
         {
           ...(current.tts?.[0] || {
@@ -142,7 +162,7 @@ export default function StudioPage() {
       ]
     };
     await review("update_scene", { sceneId: current.scene_id, scene: nextScene });
-    alert("已保存当前分镜修改。 ");
+    alert("已保存当前分镜修改。旧图片/视频确认状态已清空，需要重新生成。 ");
   }
 
   useEffect(() => {
@@ -162,8 +182,8 @@ export default function StudioPage() {
   }, [load]);
 
   useEffect(() => {
-    if (project?.plan) setPlanJson(JSON.stringify(project.plan, null, 2));
-  }, [project?.plan]);
+    if (project?.plan && !planJsonDirty) setPlanJson(JSON.stringify(project.plan, null, 2));
+  }, [project?.plan, planJsonDirty]);
 
   const scenes = project?.plan?.scenes || [];
   const currentScene = scenes[activeScene];
@@ -191,6 +211,11 @@ export default function StudioPage() {
   }, [project]);
   const planApproved = Boolean(project?.planApprovedAt);
   const allImagesApproved = Boolean(scenes.length) && scenes.every((scene) => scene.image_url && scene.image_approved);
+  const currentImageUrl = currentScene?.image_url;
+  const currentVideoUrl = currentScene?.video_url;
+  const shouldShowApprovePlan = Boolean(project?.plan) && (!planApproved || planJsonDirty);
+  const runAllDisabled = loading || !project || (Boolean(project?.plan) && !planApproved);
+  const runAllLabel = !project?.plan ? "生成/刷新剧本" : planApproved ? "执行可运行任务" : "请先确认剧本";
 
   if (projectId === "demo") {
     return <DemoStudio />;
@@ -215,7 +240,11 @@ export default function StudioPage() {
             <div className="mt-3 h-2 rounded-full bg-white/10">
               <div className="h-2 rounded-full bg-gradient-to-r from-studio-purple to-studio-cyan" style={{ width: `${progress}%` }} />
             </div>
-            <p className="mt-3 text-xs text-studio-muted">{planApproved ? "剧本已确认，可以生成图片/配音。" : "请先生成并确认剧本，再继续创作。"}</p>
+            <div className="mt-3 space-y-1 text-xs text-studio-muted">
+              <p>{project?.plan ? "1. 剧本已生成" : "1. 等待生成剧本"}</p>
+              <p className={planApproved ? "text-emerald-200" : ""}>{planApproved ? "2. 剧本已确认" : "2. 剧本待确认"}</p>
+              <p className={allImagesApproved ? "text-emerald-200" : ""}>{allImagesApproved ? "3. 图片已全部确认" : "3. 图片待确认"}</p>
+            </div>
           </div>
 
           {project?.finalVideoUrl ? (
@@ -225,43 +254,49 @@ export default function StudioPage() {
             </a>
           ) : null}
 
-          <Button onClick={() => run()} disabled={loading || !project} className="mb-3 gap-2">
+          <Button onClick={() => run()} disabled={runAllDisabled} className="mb-3 gap-2">
             {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
-            {planApproved ? "执行可运行任务" : "生成/刷新剧本"}
+            {runAllLabel}
           </Button>
 
-          {project?.plan ? (
+          {shouldShowApprovePlan ? (
             <Button onClick={approvePlan} disabled={loading} variant="secondary" className="mb-4 gap-2">
               <CheckCircle2 className="h-4 w-4" />
-              确认使用当前剧本
+              {planApproved ? "重新确认剧本" : "确认使用当前剧本"}
             </Button>
+          ) : project?.plan ? (
+            <div className="mb-4 rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">剧本已确认</div>
           ) : null}
 
           <div className="scrollbar-thin min-h-0 flex-1 space-y-2 overflow-auto pr-1">
-            {project?.tasks.map((task) => (
-              <button
-                key={task.id}
-                onClick={() => run(task.id)}
-                disabled={loading || task.status === "running" || task.status === "generating" || task.status === "succeeded"}
-                className={`w-full rounded-2xl border p-3 text-left transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70 ${
-                  task.status === "running" || task.status === "generating"
-                    ? "border-studio-cyan/50 bg-studio-cyan/10"
-                    : "border-white/10 bg-white/5"
-                }`}
-              >
-                <div className="flex items-start gap-3">
-                  <div className="mt-0.5 text-studio-muted">{taskIcon(task.type)}</div>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex items-center justify-between gap-2">
-                      <p className="line-clamp-1 text-sm font-semibold">{task.title}</p>
-                      <StatusIcon status={task.status} />
+            {project?.tasks.map((task) => {
+              const blockedReason = taskBlockedReason(task, project);
+              return (
+                <button
+                  key={task.id}
+                  onClick={() => run(task.id)}
+                  disabled={loading || Boolean(blockedReason)}
+                  title={blockedReason || undefined}
+                  className={`w-full rounded-2xl border p-3 text-left transition hover:bg-white/10 disabled:cursor-not-allowed disabled:opacity-70 ${
+                    task.status === "running" || task.status === "generating"
+                      ? "border-studio-cyan/50 bg-studio-cyan/10"
+                      : "border-white/10 bg-white/5"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="mt-0.5 text-studio-muted">{taskIcon(task.type)}</div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center justify-between gap-2">
+                        <p className="line-clamp-1 text-sm font-semibold">{task.title}</p>
+                        <StatusIcon status={task.status} />
+                      </div>
+                      <p className="mt-1 text-xs text-studio-muted">{task.agent} · {task.type} · {blockedReason || statusLabel(task.status)}</p>
+                      {task.error ? <p className="mt-2 line-clamp-2 text-xs text-red-300">{task.error}</p> : null}
                     </div>
-                    <p className="mt-1 text-xs text-studio-muted">{task.agent} · {task.type} · {statusLabel(task.status)}</p>
-                    {task.error ? <p className="mt-2 line-clamp-2 text-xs text-red-300">{task.error}</p> : null}
                   </div>
-                </div>
-              </button>
-            ))}
+                </button>
+              );
+            })}
           </div>
         </aside>
 
@@ -272,11 +307,13 @@ export default function StudioPage() {
               <h2 className="text-xl font-black">{currentScene?.scene_id || "等待生成分镜"}</h2>
             </div>
             <div className="flex gap-2">
-              {currentScene?.image_url ? (
-                <Button variant={currentScene.image_approved ? "secondary" : "primary"} disabled={loading || currentScene.image_approved} onClick={() => review("approve_image", { sceneId: currentScene.scene_id })} className="gap-2">
+              {currentImageUrl && !currentScene?.image_approved ? (
+                <Button variant="primary" disabled={loading} onClick={() => review("approve_image", { sceneId: currentScene?.scene_id })} className="gap-2">
                   <CheckCircle2 className="h-4 w-4" />
-                  {currentScene.image_approved ? "图片已确认" : "确认图片生成视频"}
+                  确认图片生成视频
                 </Button>
+              ) : currentScene?.image_approved ? (
+                <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-200">当前图片已确认</span>
               ) : null}
               {allImagesApproved ? <span className="rounded-full border border-emerald-400/30 bg-emerald-400/10 px-3 py-2 text-xs text-emerald-200">全部图片已确认</span> : null}
             </div>
@@ -284,15 +321,15 @@ export default function StudioPage() {
 
           <div className="grid min-h-0 flex-1 gap-4 lg:grid-cols-[minmax(260px,420px)_1fr]">
             <div className="mx-auto aspect-[9/16] h-full max-h-[680px] w-full max-w-[420px] overflow-hidden rounded-3xl border border-white/10 bg-black/40">
-              {currentScene?.video_url ? (
-                <video className="h-full w-full object-cover" src={currentScene.video_url} controls />
-              ) : currentScene?.image_url ? (
+              {currentVideoUrl ? (
+                <video key={currentVideoUrl} className="h-full w-full object-cover" src={currentVideoUrl} controls />
+              ) : currentImageUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element
-                <img src={currentScene.image_url} alt="scene" className="h-full w-full object-cover" />
+                <img key={currentImageUrl} src={currentImageUrl} alt="scene" className="h-full w-full object-cover" />
               ) : (
                 <div className="flex h-full flex-col items-center justify-center p-8 text-center text-studio-muted">
                   <ImageIcon className="mb-4 h-10 w-10" />
-                  <p>先确认剧本，再执行图片任务。图片满意后点击确认，才会创建视频任务。</p>
+                  <p>先确认剧本，再执行图片任务。图片生成后会在这里显示，满意后点击确认再生成视频。</p>
                 </div>
               )}
             </div>
@@ -340,10 +377,14 @@ export default function StudioPage() {
             <Edit3 className="h-5 w-5 text-studio-muted" />
           </div>
           <p className="mt-3 text-xs leading-5 text-studio-muted">这里可以直接改生成的剧本、旁白 beat、角色、图片 Prompt、视频 Prompt。保存后再点“确认使用当前剧本”。</p>
-          <textarea className="mt-4 h-[420px] w-full rounded-2xl border border-white/10 bg-black/30 p-3 font-mono text-xs leading-5 outline-none focus:border-studio-cyan" value={planJson} onChange={(e) => setPlanJson(e.target.value)} placeholder="执行 story.generate 后会出现可编辑 JSON" />
+          <textarea className="mt-4 h-[420px] w-full rounded-2xl border border-white/10 bg-black/30 p-3 font-mono text-xs leading-5 outline-none focus:border-studio-cyan" value={planJson} onChange={(e) => { setPlanJson(e.target.value); setPlanJsonDirty(true); }} placeholder="执行 story.generate 后会出现可编辑 JSON" />
           <div className="mt-3 grid grid-cols-2 gap-2">
-            <Button variant="secondary" onClick={savePlanJson} disabled={!project?.plan || loading} className="gap-2"><Save className="h-4 w-4" />保存 JSON</Button>
-            <Button onClick={approvePlan} disabled={!project?.plan || loading} className="gap-2"><CheckCircle2 className="h-4 w-4" />确认剧本</Button>
+            <Button variant="secondary" onClick={savePlanJson} disabled={!project?.plan || loading || !planJsonDirty} className="gap-2"><Save className="h-4 w-4" />保存 JSON</Button>
+            {shouldShowApprovePlan ? (
+              <Button onClick={approvePlan} disabled={!project?.plan || loading} className="gap-2"><CheckCircle2 className="h-4 w-4" />{planApproved ? "重新确认" : "确认剧本"}</Button>
+            ) : (
+              <div className="flex items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">已确认</div>
+            )}
           </div>
 
           <h3 className="mt-6 font-bold">角色</h3>

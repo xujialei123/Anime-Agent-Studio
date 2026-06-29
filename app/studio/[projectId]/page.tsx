@@ -273,7 +273,7 @@ export default function StudioPage() {
             </div>
             <div className="flex gap-2">
               {currentScene?.image_url ? (
-                <Button variant={currentScene.image_approved ? "secondary" : "default"} disabled={loading || currentScene.image_approved} onClick={() => review("approve_image", { sceneId: currentScene.scene_id })} className="gap-2">
+                <Button variant={currentScene.image_approved ? "secondary" : "primary"} disabled={loading || currentScene.image_approved} onClick={() => review("approve_image", { sceneId: currentScene.scene_id })} className="gap-2">
                   <CheckCircle2 className="h-4 w-4" />
                   {currentScene.image_approved ? "图片已确认" : "确认图片生成视频"}
                 </Button>
@@ -300,7 +300,7 @@ export default function StudioPage() {
             <div className="scrollbar-thin min-h-0 overflow-auto rounded-3xl border border-white/10 bg-black/25 p-5">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="font-bold">当前分镜可编辑内容</h3>
-                <Button size="sm" variant="secondary" onClick={saveSceneDraft} disabled={!currentScene || loading} className="gap-2"><Save className="h-4 w-4" />保存分镜</Button>
+                <Button variant="secondary" onClick={saveSceneDraft} disabled={!currentScene || loading} className="gap-2 px-3 py-2 text-xs"><Save className="h-4 w-4" />保存分镜</Button>
               </div>
 
               <label className="mt-4 block text-xs text-studio-muted">旁白</label>

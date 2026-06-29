@@ -9,6 +9,8 @@ export type ProjectInput = {
   sceneCount: number;
   voiceMode: "built_in" | "voice_design";
   autoRun: boolean;
+  /** 用户自定义总导演 Prompt。固定 Prompt 只作为默认模板。 */
+  directorPrompt?: string;
 };
 
 export type VoiceSpec = {
@@ -110,6 +112,8 @@ export type AnimeScene = {
   image_url?: string;
   video_url?: string;
   audio_url?: string;
+  /** 图片是否已经由用户确认可继续生成视频。 */
+  image_approved?: boolean;
 };
 
 export type AnimeProjectPlan = {
@@ -202,6 +206,10 @@ export type StoredProject = {
   input: ProjectInput;
   plan?: AnimeProjectPlan;
   finalVideoUrl?: string;
+  /** 用户确认剧本/分镜后才创建图片和配音任务。 */
+  planApprovedAt?: string;
+  /** 已根据当前确认剧本创建后续任务的时间。 */
+  generationTasksCreatedAt?: string;
   tasks: AgentTask[];
   assets: Array<{ id: string; type: string; url: string; meta?: Record<string, unknown> }>;
   status: "draft" | "planned" | "generating" | "done" | "failed";

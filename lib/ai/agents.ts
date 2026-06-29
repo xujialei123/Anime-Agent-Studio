@@ -19,7 +19,8 @@ export const AGENTS: AgentDefinition[] = [
       "不得复刻知名 IP、明星肖像或已有动漫角色。",
       "所有字段必须服务于后续图片、视频、配音、剪辑任务。",
       "visual_style 和所有 image/video prompt 必须强制 2D 漫画分镜风，禁止写实、真人、3D、电影实拍感。",
-      "每个 scene 必须是上一 scene 的直接结果，必须写清 starting_state、ending_state、continuity_from_previous 和 visual_continuity_anchor。"
+      "每个 scene 必须是上一 scene 的直接结果，必须写清 starting_state、ending_state、continuity_from_previous 和 visual_continuity_anchor。",
+      "分镜数量变多时不要新增支线、地点和角色，多出的分镜只用于放大同一主线动作或情绪。"
     ],
     outputContract: ["AnimeProjectPlan JSON", "characters[]", "scenes[]", "final_editing_plan"]
   },

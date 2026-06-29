@@ -40,17 +40,89 @@ MIMO_TTS_MODEL=mimo-v2.5-tts
 MIMO_TTS_VOICE_DESIGN_MODEL=mimo-v2.5-tts-voicedesign
 
 FFMPEG_PATH=ffmpeg
+FFPROBE_PATH=ffprobe
 ```
 
 ## 使用流程
 
 1. 进入 `/create`
 2. 输入短剧主题
-3. 点击“创建 Agent 任务”
-4. 进入 `/studio/[projectId]`
-5. 先执行 `story.generate`
-6. 继续执行图片、视频、配音任务
-7. 最终接入 `/api/render/merge` 或独立 Worker 合成
+3. 推荐先使用 `30 秒 / 6 个 beat`
+4. 点击“创建 Agent 任务”
+5. 进入 `/studio/[projectId]`
+6. 先执行 `story.generate`
+7. 继续执行角色图、beat 关键帧、beat 视频、beat 旁白任务
+8. 最终由 `project.merge` 或 `/api/render/merge` 合成
+
+## 旁白 Beat 驱动流程
+
+为了解决“剧情不连贯、画面和旁白不匹配”，当前版本采用旁白驱动：
+
+```txt
+一句旁白 = 一个 narration beat = 一个漫画关键帧 = 一个轻量视频片段 = 一个合成片段
+```
+
+生成链路：
+
+```txt
+Story Director
+  ↓
+生成 narration_beats
+  ↓
+每个 beat 生成对应 scene
+  ↓
+角色定稿图
+  ↓
+每个 beat 的漫画关键帧
+  ↓
+每个 beat 的轻量漫画动效
+  ↓
+每个 beat 的旁白 TTS
+  ↓
+按真实旁白音频时长合成
+```
+
+`narration_beats` 和 `scenes` 必须一一对应：
+
+```txt
+narration_beats[0] ↔ scenes[0]
+narration_beats[1] ↔ scenes[1]
+...
+```
+
+每个 beat 包含：
+
+- `narration`：这一句旁白。
+- `visual_must_show`：画面必须表现什么。
+- `visual_must_not_show`：画面不能出现什么，防止跑偏。
+- `starting_state`：本 beat 起始状态。
+- `ending_state`：本 beat 结束状态。
+- `continuity_from_previous`：从上一 beat 怎么接过来。
+- `image_prompt`：只生成这一句旁白对应漫画关键帧。
+- `video_prompt`：只做轻微漫画动效，不让视频模型自由演剧情。
+
+## 合成策略
+
+合成层不再默认使用淡入淡出转场。旁白驱动模式默认硬切，避免 `xfade/acrossfade` 吃掉每句旁白的头尾，导致画面和声音错位。
+
+如果传入 `audioUrl`，合成器会尝试用 `ffprobe` 读取真实音频时长，并让视频片段服从旁白音频时长，而不是固定 5 秒。
+
+外部调用 `/api/render/merge` 时也可以传：
+
+```json
+{
+  "scenes": [
+    {
+      "videoUrl": "https://.../beat-001.mp4",
+      "audioUrl": "https://.../beat-001.wav",
+      "duration": 4,
+      "audioDuration": 3.6
+    }
+  ],
+  "aspectRatio": "9:16",
+  "transitionDuration": 0
+}
+```
 
 ## 目录说明
 
@@ -74,6 +146,7 @@ lib/
   ai/prompts/            总导演 Prompt
   providers/agnes.ts     Agnes API 封装
   providers/mimo.ts      MiMo API 封装
+  render/media-composer.ts 合成器
   tasks/factory.ts       任务生成
   tasks/runner.ts        任务执行器
   store/memory.ts        Demo 内存存储

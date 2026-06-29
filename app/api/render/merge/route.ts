@@ -9,15 +9,18 @@ type MergeScene = {
   videoUrl: string;
   audioUrl?: string;
   duration: number;
+  audioDuration?: number;
 };
 
 function resolveScenes(body: Record<string, unknown>) {
   if (Array.isArray(body.scenes)) return body.scenes as MergeScene[];
   if (Array.isArray(body.videoUrls)) {
     const audioUrls = Array.isArray(body.audioUrls) ? body.audioUrls : [];
+    const audioDurations = Array.isArray(body.audioDurations) ? body.audioDurations : [];
     return body.videoUrls.map((videoUrl, index) => ({
       videoUrl: String(videoUrl),
       audioUrl: audioUrls[index] ? String(audioUrls[index]) : undefined,
+      audioDuration: audioDurations[index] ? Number(audioDurations[index]) : undefined,
       duration: Number(body.duration || 5)
     }));
   }
@@ -37,7 +40,8 @@ export async function POST(req: NextRequest) {
       : "9:16") as AspectRatio;
     const finalBuffer = await composeFinalVideo(scenes, {
       aspectRatio,
-      transitionDuration: Number(body.transitionDuration || 0.35)
+      // 旁白驱动漫剧默认硬切，避免转场吃掉旁白头尾。需要转场时再显式传 transitionDuration。
+      transitionDuration: Number(body.transitionDuration ?? 0)
     });
 
     return new NextResponse(new Uint8Array(finalBuffer), {

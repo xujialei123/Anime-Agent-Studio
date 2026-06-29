@@ -63,6 +63,14 @@ export type AnimeScene = {
   };
   action: string;
   emotion: string;
+  /** 上一幕到本幕的剧情/动作承接，scene_001 可为空。 */
+  continuity_from_previous?: string;
+  /** 本幕第一帧应该继承的角色位置、朝向、表情、手势和环境状态。 */
+  starting_state?: string;
+  /** 本幕结尾应该留给下一幕继承的角色位置、朝向、表情、手势和环境状态。 */
+  ending_state?: string;
+  /** 给图片生成使用的连续性锚点，描述必须从上一幕最后一帧保留什么。 */
+  visual_continuity_anchor?: string;
   image_prompt: string;
   image_negative_prompt: string;
   video_prompt: string;

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import type { AnimeProjectPlan } from "@/lib/ai/types";
+import type { AnimeProjectPlan, StoredProject } from "@/lib/ai/types";
 import { createMergeTask, createReviewGenerationTasks, createVideoTaskForScene, normalizePlanScenes } from "@/lib/tasks/factory";
 import { getProject, replaceProjectTasks, saveProject, saveTask } from "@/lib/store/memory";
 
@@ -20,8 +20,33 @@ function resetGeneratedAssets(plan: AnimeProjectPlan) {
   return plan;
 }
 
+function getSceneImageFromTaskOrAsset(project: StoredProject, sceneId: string) {
+  const sceneAsset = [...project.assets]
+    .reverse()
+    .find((asset) => asset.type === "scene_image" && asset.meta?.sceneId === sceneId && asset.url);
+  if (typeof sceneAsset?.url === "string") return sceneAsset.url;
+
+  const imageTask = [...project.tasks]
+    .reverse()
+    .find((task) => task.type === "scene.image.generate" && (task.input.scene as { scene_id?: string } | undefined)?.scene_id === sceneId);
+  const imageUrl = imageTask?.output?.imageUrl;
+  return typeof imageUrl === "string" ? imageUrl : undefined;
+}
+
+function syncSceneImagesFromOutputs(project: StoredProject) {
+  if (!project.plan) return project;
+  for (const scene of project.plan.scenes) {
+    if (!scene.image_url) {
+      const imageUrl = getSceneImageFromTaskOrAsset(project, scene.scene_id);
+      if (imageUrl) scene.image_url = imageUrl;
+    }
+  }
+  saveProject(project);
+  return project;
+}
+
 function ensureMergeTask(projectId: string) {
-  const project = getProject(projectId);
+  const project = syncSceneImagesFromOutputs(getProject(projectId));
   if (!project.plan) throw new Error("项目缺少剧本方案");
   const exists = project.tasks.some((task) => task.type === "project.merge");
   if (exists) return;
@@ -30,7 +55,7 @@ function ensureMergeTask(projectId: string) {
 }
 
 function ensureVideoTask(projectId: string, sceneId: string) {
-  const project = getProject(projectId);
+  const project = syncSceneImagesFromOutputs(getProject(projectId));
   if (!project.plan) throw new Error("项目缺少剧本方案");
   const scene = project.plan.scenes.find((item) => item.scene_id === sceneId);
   if (!scene) throw new Error(`分镜不存在：${sceneId}`);
@@ -45,7 +70,7 @@ function ensureVideoTask(projectId: string, sceneId: string) {
     saveTask(videoTask);
   }
 
-  const latest = getProject(projectId);
+  const latest = syncSceneImagesFromOutputs(getProject(projectId));
   const allGeneratedImagesApproved = latest.plan?.scenes.length
     ? latest.plan.scenes.every((item) => item.image_url && item.image_approved)
     : false;
@@ -137,16 +162,17 @@ export async function POST(req: NextRequest) {
     if (action === "approve_image") {
       if (!project.planApprovedAt) throw new Error("请先确认剧本，再确认图片");
       ensureVideoTask(projectId, String(body.sceneId || ""));
-      return NextResponse.json({ project: getProject(projectId) });
+      return NextResponse.json({ project: syncSceneImagesFromOutputs(getProject(projectId)) });
     }
 
     if (action === "approve_all_images") {
       if (!project.planApprovedAt) throw new Error("请先确认剧本，再确认图片");
       if (!project.plan) throw new Error("项目缺少剧本方案");
+      syncSceneImagesFromOutputs(project);
       for (const scene of project.plan.scenes) {
         if (scene.image_url) ensureVideoTask(projectId, scene.scene_id);
       }
-      return NextResponse.json({ project: getProject(projectId) });
+      return NextResponse.json({ project: syncSceneImagesFromOutputs(getProject(projectId)) });
     }
 
     return NextResponse.json({ error: `未知 action：${action}` }, { status: 400 });

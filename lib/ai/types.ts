@@ -47,8 +47,29 @@ export type AnimeCharacter = {
   image_url?: string;
 };
 
+export type NarrationBeat = {
+  beat_id: string;
+  scene_id: string;
+  order: number;
+  narration: string;
+  duration_seconds: number;
+  characters_in_scene: string[];
+  visual_must_show: string;
+  visual_must_not_show: string;
+  continuity_from_previous: string;
+  starting_state: string;
+  ending_state: string;
+  visual_continuity_anchor: string;
+  image_prompt: string;
+  image_negative_prompt: string;
+  video_prompt: string;
+  subtitle_text: string;
+};
+
 export type AnimeScene = {
   scene_id: string;
+  /** 如果这个 scene 来自 narration_beats，这里会保存 beat_id，方便排查旁白/画面是否一一对应。 */
+  beat_id?: string;
   time_range: string;
   duration_seconds: number;
   scene_purpose: string;
@@ -63,6 +84,12 @@ export type AnimeScene = {
   };
   action: string;
   emotion: string;
+  continuity_from_previous?: string;
+  starting_state?: string;
+  ending_state?: string;
+  visual_continuity_anchor?: string;
+  visual_must_show?: string;
+  visual_must_not_show?: string;
   image_prompt: string;
   image_negative_prompt: string;
   video_prompt: string;
@@ -120,6 +147,9 @@ export type AnimeProjectPlan = {
     episode_summary: string;
     beat_sheet: Array<{ time_range: string; purpose: string; content: string }>;
   };
+  /** 旁白驱动时间轴：一句旁白 = 一个画面任务 = 一个视频任务 = 一个合成片段。 */
+  narration_beats?: NarrationBeat[];
+  /** scenes 必须和 narration_beats 一一对应；旧数据可以继续只用 scenes。 */
   scenes: AnimeScene[];
   final_editing_plan: {
     video_order: string[];

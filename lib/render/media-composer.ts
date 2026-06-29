@@ -2,7 +2,7 @@ import { spawn } from "node:child_process";
 import { createWriteStream } from "node:fs";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { extname, join } from "node:path";
+import { dirname, extname, join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { AspectRatio } from "@/lib/ai/types";
@@ -38,10 +38,18 @@ function runFfmpeg(args: string[]) {
   });
 }
 
+function resolveFfprobePath() {
+  if (process.env.FFPROBE_PATH) return process.env.FFPROBE_PATH;
+  const ffmpegPath = process.env.FFMPEG_PATH;
+  if (!ffmpegPath || ffmpegPath === "ffmpeg") return "ffprobe";
+  const isWindowsExe = /ffmpeg\.exe$/i.test(ffmpegPath);
+  if (/ffmpeg(?:\.exe)?$/i.test(ffmpegPath)) return join(dirname(ffmpegPath), isWindowsExe ? "ffprobe.exe" : "ffprobe");
+  return "ffprobe";
+}
+
 function probeDuration(filePath: string) {
   return new Promise<number | undefined>((resolve) => {
-    const ffprobePath = process.env.FFPROBE_PATH || (process.env.FFMPEG_PATH ? process.env.FFMPEG_PATH.replace(/ffmpeg(?:\.exe)?$/i, "ffprobe$&".replace("ffprobeffmpeg", "ffprobe")) : "ffprobe");
-    const child = spawn(ffprobePath, [
+    const child = spawn(resolveFfprobePath(), [
       "-v", "error",
       "-show_entries", "format=duration",
       "-of", "default=noprint_wrappers=1:nokey=1",

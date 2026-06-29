@@ -38,6 +38,32 @@ export function saveTask(task: AgentTask) {
   return task;
 }
 
+export function saveTasks(tasks: AgentTask[]) {
+  for (const task of tasks) saveTask(task);
+  return tasks;
+}
+
+export function replaceProjectTasks(projectId: string, tasks: AgentTask[]) {
+  const project = getProject(projectId);
+  for (const task of project.tasks) taskStore.delete(task.id);
+  project.tasks = [];
+  saveProject(project);
+  for (const task of tasks) saveTask(task);
+  return getProject(projectId);
+}
+
+export function removeProjectTasksByType(projectId: string, types: string[]) {
+  const project = getProject(projectId);
+  const removeSet = new Set(types);
+  const kept = project.tasks.filter((task) => !removeSet.has(task.type));
+  for (const task of project.tasks) {
+    if (removeSet.has(task.type)) taskStore.delete(task.id);
+  }
+  project.tasks = kept;
+  saveProject(project);
+  return project;
+}
+
 export function getTask(taskId: string) {
   const task = taskStore.get(taskId);
   if (!task) throw new Error(`任务不存在：${taskId}`);

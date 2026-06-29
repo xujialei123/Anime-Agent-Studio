@@ -74,6 +74,11 @@ export default function StudioPage() {
     return promise;
   }, [projectId]);
 
+  const storyTask = project?.tasks.find((task) => task.type === "story.generate");
+  const storyRunning = storyTask?.status === "running" || storyTask?.status === "generating";
+  const storyFailed = storyTask?.status === "failed";
+  const hasActiveTask = Boolean(project?.tasks.some((task) => task.status === "running" || task.status === "generating"));
+
   async function run(taskId?: string) {
     setLoading(true);
     try {
@@ -84,6 +89,7 @@ export default function StudioPage() {
       });
       const data = await res.json();
       if (!res.ok) throw new Error(data.error || "执行失败");
+      if (data.project) setProject(data.project);
       await load();
     } catch (error) {
       alert(error instanceof Error ? error.message : String(error));
@@ -171,7 +177,7 @@ export default function StudioPage() {
 
     const loop = async () => {
       await load().catch(() => undefined);
-      if (!cancelled) timer = setTimeout(loop, 5000);
+      if (!cancelled && (!project || hasActiveTask)) timer = setTimeout(loop, 5000);
     };
 
     loop();
@@ -179,7 +185,7 @@ export default function StudioPage() {
       cancelled = true;
       if (timer) clearTimeout(timer);
     };
-  }, [load]);
+  }, [load, project, hasActiveTask]);
 
   useEffect(() => {
     if (project?.plan && !planJsonDirty) setPlanJson(JSON.stringify(project.plan, null, 2));
@@ -214,8 +220,16 @@ export default function StudioPage() {
   const currentImageUrl = currentScene?.image_url;
   const currentVideoUrl = currentScene?.video_url;
   const shouldShowApprovePlan = Boolean(project?.plan) && (!planApproved || planJsonDirty);
-  const runAllDisabled = loading || !project || (Boolean(project?.plan) && !planApproved);
-  const runAllLabel = !project?.plan ? "生成/刷新剧本" : planApproved ? "执行可运行任务" : "请先确认剧本";
+  const runAllDisabled = loading || !project || storyRunning || (Boolean(project?.plan) && !planApproved);
+  const runAllLabel = !project?.plan
+    ? storyRunning
+      ? "剧本生成中"
+      : storyFailed
+        ? "重新生成剧本"
+        : "生成剧本"
+    : planApproved
+      ? "执行可运行任务"
+      : "请先确认剧本";
 
   if (projectId === "demo") {
     return <DemoStudio />;
@@ -241,7 +255,7 @@ export default function StudioPage() {
               <div className="h-2 rounded-full bg-gradient-to-r from-studio-purple to-studio-cyan" style={{ width: `${progress}%` }} />
             </div>
             <div className="mt-3 space-y-1 text-xs text-studio-muted">
-              <p>{project?.plan ? "1. 剧本已生成" : "1. 等待生成剧本"}</p>
+              <p className={storyFailed ? "text-red-200" : project?.plan ? "text-emerald-200" : ""}>{storyFailed ? "1. 剧本生成失败，可重新生成" : project?.plan ? "1. 剧本已生成" : "1. 等待生成剧本"}</p>
               <p className={planApproved ? "text-emerald-200" : ""}>{planApproved ? "2. 剧本已确认" : "2. 剧本待确认"}</p>
               <p className={allImagesApproved ? "text-emerald-200" : ""}>{allImagesApproved ? "3. 图片已全部确认" : "3. 图片待确认"}</p>
             </div>
@@ -255,7 +269,7 @@ export default function StudioPage() {
           ) : null}
 
           <Button onClick={() => run()} disabled={runAllDisabled} className="mb-3 gap-2">
-            {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
+            {loading || storyRunning ? <Loader2 className="h-4 w-4 animate-spin" /> : <Play className="h-4 w-4" />}
             {runAllLabel}
           </Button>
 
@@ -382,8 +396,10 @@ export default function StudioPage() {
             <Button variant="secondary" onClick={savePlanJson} disabled={!project?.plan || loading || !planJsonDirty} className="gap-2"><Save className="h-4 w-4" />保存 JSON</Button>
             {shouldShowApprovePlan ? (
               <Button onClick={approvePlan} disabled={!project?.plan || loading} className="gap-2"><CheckCircle2 className="h-4 w-4" />{planApproved ? "重新确认" : "确认剧本"}</Button>
-            ) : (
+            ) : project?.plan ? (
               <div className="flex items-center justify-center rounded-2xl border border-emerald-400/20 bg-emerald-400/10 px-4 py-3 text-sm text-emerald-200">已确认</div>
+            ) : (
+              <div className="flex items-center justify-center rounded-2xl border border-white/10 bg-white/5 px-4 py-3 text-sm text-studio-muted">待生成</div>
             )}
           </div>
 

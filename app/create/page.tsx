@@ -16,8 +16,8 @@ export default function CreatePage() {
     idea: "生成一个男主被家族背叛，三年后觉醒龙魂归来复仇的动漫短剧，风格要热血、爽、反转多。",
     genre: "热血爽文",
     style: MANGA_STYLE_PRESET,
-    durationSeconds: 60,
-    sceneCount: 10,
+    durationSeconds: 30,
+    sceneCount: 6,
     aspectRatio: "9:16",
     voiceMode: "voice_design",
     autoRun: false
@@ -47,7 +47,7 @@ export default function CreatePage() {
         <div className="mb-8">
           <p className="text-sm text-studio-muted">Create</p>
           <h1 className="mt-2 text-4xl font-black">创建动漫短剧</h1>
-          <p className="mt-3 text-studio-muted">输入一句主题，Agent 会自动生成剧本、角色、分镜和后续任务。</p>
+          <p className="mt-3 text-studio-muted">输入一句主题，Agent 会自动生成剧本、角色、连续分镜和后续任务。</p>
         </div>
 
         <div className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -99,6 +99,7 @@ export default function CreatePage() {
                   <option value={10}>10 个分镜</option>
                   <option value={15}>15 个分镜</option>
                 </Select>
+                <p className="mt-2 text-xs text-studio-muted">先用 30 秒 / 6 个分镜测试连续性，稳定后再拉长。</p>
               </div>
               <div>
                 <label className="text-sm font-semibold">画幅</label>
@@ -127,10 +128,11 @@ export default function CreatePage() {
             <h2 className="text-lg font-bold">生成流程</h2>
             <div className="mt-5 space-y-4">
               {[
-                "故事总导演生成 JSON",
+                "故事总导演生成连续分镜 JSON",
                 "角色一致性 Agent 生成角色卡",
                 "Agnes 生成角色定稿图",
                 "每个分镜都生成漫画关键帧",
+                "后续关键帧参考上一幕最后一帧",
                 "Agnes 图生视频生成片段",
                 "MiMo 合成旁白和对白",
                 "ffmpeg 合成最终短剧"

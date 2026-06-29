@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import type { AgentTask, AnimeCharacter, AnimeProjectPlan, VoiceSpec, StoredProject } from "@/lib/ai/types";
+import type { AgentTask, AnimeCharacter, AnimeProjectPlan, AnimeScene, VoiceSpec } from "@/lib/ai/types";
 import { buildAnimeDirectorPrompt } from "@/lib/ai/prompts/anime-director";
 import { extractJson, makeId } from "@/lib/ai/json";
 import { agnesChatCompletion, agnesCreateVideo, agnesGenerateImage, agnesGetVideoStatus } from "@/lib/providers/agnes";
@@ -162,6 +162,7 @@ async function completeVideoTask(
       return;
     }
 
+    // 这一张图不是最终关键帧，而是下一幕关键帧生成时的剧情连续性参考。
     nextScene.image_url = lastFrameUrl;
     latestProject.assets.push({ id: makeId("asset"), type: "scene_last_frame", url: lastFrameUrl, meta: { sceneId, nextSceneId: nextScene.scene_id } });
   }
@@ -328,7 +329,7 @@ export async function runOneTask(task: AgentTask) {
 
     if (task.type === "story.generate") {
       const prompt = buildAnimeDirectorPrompt(project.input);
-      const raw = await agnesChatCompletion({ prompt, temperature: 0.7 });
+      const raw = await agnesChatCompletion({ prompt, temperature: 0.65 });
       const plan = extractJson<AnimeProjectPlan>(raw);
       project.plan = plan;
       project.status = "planned";
@@ -349,23 +350,23 @@ export async function runOneTask(task: AgentTask) {
         return task;
       }
 
-      const visualStyle = task.input.visualStyle as { global_style_prompt?: string; negative_prompt?: string };
+      const visualStyle = task.input.visualStyle as AnimeProjectPlan["visual_style"];
       const prompt = [
         character.visual_keywords,
         character.face,
         character.hair,
         character.outfit,
         `signature item: ${character.signature_item}`,
-        "anime character sheet, clean background, front view, half body, consistent face, detailed eyes",
+        "2D manga character reference sheet, clean background, front view, half body, consistent face, detailed anime eyes, clean ink line art, cel shading, screentone texture",
         visualStyle.global_style_prompt,
         "masterpiece, high detail, sharp line art"
       ].filter(Boolean).join(", ");
       const result = await agnesGenerateImage({
         prompt,
-        negativePrompt: visualStyle.negative_prompt,
+        negativePrompt: combineNegativePrompts(visualStyle.negative_prompt),
         aspectRatio: String(task.input.aspectRatio || "9:16")
       });
-      task.output = { imageUrl: result.url, provider: result.raw };
+      task.output = { imageUrl: result.url, provider: result.raw, prompt };
 
       if (project.plan) {
         const target = project.plan.characters.find((item) => item.name === character.name);
@@ -376,30 +377,41 @@ export async function runOneTask(task: AgentTask) {
     }
 
     if (task.type === "scene.image.generate") {
-      const scene = task.input.scene as {
-        scene_id: string;
-        image_prompt: string;
-        image_negative_prompt?: string;
-        characters_in_scene?: string[];
-      };
-      const visualStyle = task.input.visualStyle as { global_style_prompt?: string; negative_prompt?: string };
-      const referenceImageUrls =
-        project.plan?.characters
-          .filter((character) => scene.characters_in_scene?.includes(character.name) && character.image_url)
-          .map((character) => character.image_url as string) || [];
+      const inputScene = task.input.scene as AnimeScene;
+      const sceneId = inputScene.scene_id;
+      const sceneIndex = project.plan?.scenes.findIndex((item) => item.scene_id === sceneId) ?? -1;
+      const scene = sceneIndex >= 0 ? project.plan?.scenes[sceneIndex] : inputScene;
+      const previousScene = sceneIndex > 0 ? project.plan?.scenes[sceneIndex - 1] : undefined;
+      const nextScene = project.plan?.scenes[sceneIndex + 1];
+      const visualStyle = task.input.visualStyle as AnimeProjectPlan["visual_style"];
+      const characters = collectSceneCharacters(project.plan, scene, previousScene);
+      const characterReferenceUrls = characters
+        .map((character) => character.image_url)
+        .filter((url): url is string => Boolean(url));
+      const continuityReferenceUrl = findContinuityReferenceUrl(project, sceneId);
+      const referenceImageUrls = unique([continuityReferenceUrl, ...characterReferenceUrls].filter((url): url is string => Boolean(url)));
+      const prompt = buildContinuityImagePrompt({
+        basePrompt: scene?.image_prompt || inputScene.image_prompt,
+        characters,
+        scene,
+        previousScene,
+        nextScene,
+        visualStyle,
+        hasContinuityReference: Boolean(continuityReferenceUrl)
+      });
 
       const result = await agnesGenerateImage({
-        prompt: `${scene.image_prompt}, ${visualStyle.global_style_prompt || ""}`,
-        negativePrompt: scene.image_negative_prompt || visualStyle.negative_prompt,
+        prompt,
+        negativePrompt: combineNegativePrompts(scene?.image_negative_prompt, visualStyle.negative_prompt),
         aspectRatio: String(task.input.aspectRatio || "9:16"),
         imageUrls: referenceImageUrls
       });
-      task.output = { imageUrl: result.url, provider: result.raw };
+      task.output = { imageUrl: result.url, provider: result.raw, prompt, referenceImageUrls, continuityReferenceUrl };
 
       if (project.plan) {
-        const target = project.plan.scenes.find((item) => item.scene_id === scene.scene_id);
+        const target = project.plan.scenes.find((item) => item.scene_id === sceneId);
         if (target) target.image_url = result.url;
-        project.assets.push({ id: makeId("asset"), type: "scene_image", url: result.url, meta: { sceneId: scene.scene_id } });
+        project.assets.push({ id: makeId("asset"), type: "scene_image", url: result.url, meta: { sceneId, continuityReferenceUrl } });
         saveProject(project);
       }
     }
@@ -538,6 +550,10 @@ type ContinuityScene = {
   emotion?: string;
   location?: string;
   visual_description?: string;
+  continuity_from_previous?: string;
+  starting_state?: string;
+  ending_state?: string;
+  visual_continuity_anchor?: string;
   characters_in_scene?: string[];
   camera?: { shot_type?: string; angle?: string; movement?: string };
 };
@@ -571,6 +587,42 @@ function compactText(value: string | undefined) {
   return value?.replace(/\s+/g, " ").trim() || "";
 }
 
+function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+function combineNegativePrompts(...values: Array<string | undefined>) {
+  return unique([
+    ...values.flatMap((value) => compactText(value).split(",").map((item) => item.trim()).filter(Boolean)),
+    "photorealistic",
+    "live action",
+    "real person",
+    "3D render",
+    "game CG",
+    "cinematic realism",
+    "identity change",
+    "face drift",
+    "outfit change",
+    "hair style change",
+    "scene reset",
+    "unrelated new scene",
+    "sudden time jump",
+    "extra characters",
+    "warped hands",
+    "deformed fingers",
+    "watermark",
+    "logo",
+    "text on image"
+  ]).join(", ");
+}
+
+function findContinuityReferenceUrl(project: ReturnType<typeof getProject>, sceneId: string) {
+  const asset = [...project.assets]
+    .reverse()
+    .find((item) => item.type === "scene_last_frame" && item.meta?.nextSceneId === sceneId);
+  return typeof asset?.url === "string" ? asset.url : undefined;
+}
+
 function removePolicySensitiveTerms(value: string | undefined) {
   return compactText(value)
     .replace(/\b(blood(?:y)?|gore|kill(?:ed|ing)?|murder|dead|death|dying|attack|fight(?:ing)?|combat|violent|violence|weapon|sword|knife|gun|bullet|explosion|torture|wound(?:ed)?|injury|nude|naked|sexual)\b/gi, "")
@@ -590,6 +642,46 @@ function describePolicySafeCharacterLock(character: AnimeCharacter) {
   ].filter(Boolean).join("; ");
 }
 
+function buildContinuityImagePrompt(params: {
+  basePrompt: string;
+  characters: AnimeCharacter[];
+  scene?: ContinuityScene;
+  previousScene?: ContinuityScene;
+  nextScene?: ContinuityScene;
+  visualStyle?: AnimeProjectPlan["visual_style"];
+  hasContinuityReference: boolean;
+}) {
+  const characterLock = params.characters.map(describeCharacterLock).filter(Boolean).join(" | ");
+  const styleLock = [
+    params.visualStyle?.global_style_prompt,
+    params.visualStyle?.lighting_style && `lighting: ${params.visualStyle.lighting_style}`,
+    params.visualStyle?.camera_style && `camera style: ${params.visualStyle.camera_style}`,
+    params.visualStyle?.color_palette?.length ? `palette: ${params.visualStyle.color_palette.join(", ")}` : "",
+    params.visualStyle?.quality_keywords?.length ? params.visualStyle.quality_keywords.join(", ") : ""
+  ].filter(Boolean).join(", ");
+
+  return [
+    params.hasContinuityReference
+      ? "Generate the next 2D manga keyframe using the first supplied reference image as the previous shot final frame. Do not reset the story."
+      : "Generate the opening 2D manga keyframe for the first shot.",
+    "This image must look like a manga comic panel, not a movie still: clean black ink line art, anime cel shading, screentone texture, flat color blocks, expressive anime eyes.",
+    characterLock ? `Character identity lock: ${characterLock}.` : "",
+    styleLock ? `Style lock: ${styleLock}.` : "",
+    params.previousScene
+      ? `Previous shot ${params.previousScene.scene_id} ended as: ${compactText(params.previousScene.ending_state || `${params.previousScene.plot || ""} ${params.previousScene.action || ""} ${params.previousScene.emotion || ""}`)}.`
+      : "Opening shot: establish the character and conflict clearly.",
+    params.scene?.continuity_from_previous ? `Continuity from previous: ${compactText(params.scene.continuity_from_previous)}.` : "",
+    params.scene?.starting_state ? `Required starting state: ${compactText(params.scene.starting_state)}.` : "",
+    params.scene?.visual_continuity_anchor ? `Visual continuity anchor: ${compactText(params.scene.visual_continuity_anchor)}.` : "",
+    `Current story beat ${params.scene?.scene_id || ""}: ${compactText(`${params.scene?.plot || ""} ${params.scene?.visual_description || ""} ${params.scene?.action || ""} ${params.scene?.emotion || ""} ${params.scene?.location || ""}`)}.`,
+    params.scene?.ending_state ? `Compose the panel so the following video can end at: ${compactText(params.scene.ending_state)}.` : "",
+    params.nextScene ? `Leave a readable composition that can transition to next beat ${params.nextScene.scene_id}: ${compactText(params.nextScene.starting_state || params.nextScene.plot)}.` : "",
+    "Keep the same characters, same costumes, same hair silhouettes, same signature items, same location continuity, same light direction, and same manga style as the references.",
+    "Avoid sudden location changes, time jumps, new characters, different costumes, changed hairstyles, changed faces, cropped faces, backs turned to camera, or unreadable body poses.",
+    params.basePrompt
+  ].filter(Boolean).join(" ");
+}
+
 function buildPolicySafeVideoPrompt(params: {
   basePrompt: string;
   characters: AnimeCharacter[];
@@ -601,16 +693,17 @@ function buildPolicySafeVideoPrompt(params: {
   const characterLock = params.characters.map(describePolicySafeCharacterLock).filter(Boolean).join(" | ");
   const safeStyle = removePolicySensitiveTerms(params.visualStyle?.global_style_prompt);
   return [
-    "Create a family-friendly, calm anime animation from the supplied reference image.",
+    "Create a family-friendly, calm 2D manga animation from the supplied keyframe.",
     "Use the supplied image as the exact first frame and a strict visual identity reference.",
     characterLock ? `Keep these character appearances unchanged: ${characterLock}.` : "Keep every character appearance unchanged.",
-    safeStyle ? `Visual style: ${safeStyle}.` : "Preserve the existing anime art style, colors, lighting, and background.",
+    safeStyle ? `Visual style: ${safeStyle}.` : "Preserve the existing 2D manga art style, colors, lighting, and background.",
+    params.scene?.starting_state ? `Start state: ${removePolicySensitiveTerms(params.scene.starting_state)}.` : "",
+    params.scene?.ending_state ? `End state: ${removePolicySensitiveTerms(params.scene.ending_state)}.` : "",
     "Animate only subtle natural breathing, one gentle blink, slight hair and fabric movement, and a slow steady camera movement.",
-    "Keep the mood neutral and peaceful with ordinary non-confrontational motion.",
-    "Do not introduce new people, objects, costume changes, scene changes, or dramatic events.",
+    "Do not introduce new people, objects, costume changes, scene changes, dramatic events, or time jumps.",
     "Maintain stable faces, anatomy, clothing, colors, composition, and background throughout.",
     "Finish with a clear stable frame for 1 second, showing every visible character completely and unobstructed."
-  ].join(" ");
+  ].filter(Boolean).join(" ");
 }
 
 function buildContinuityVideoPrompt(params: {
@@ -635,20 +728,25 @@ function buildContinuityVideoPrompt(params: {
     params.scene?.camera?.movement
   ].filter(Boolean).join(", ");
   const parts = [
-    "Start from the supplied reference image, which is the exact first frame for this shot.",
-    "Treat the supplied reference image as a hard identity anchor. Do not redesign any character.",
+    "Start from the supplied manga keyframe, which is the exact first frame for this shot.",
+    "Treat the supplied keyframe as a hard story-continuity anchor and identity anchor. Do not redesign any character and do not reset the scene.",
     characterLock ? `Character identity lock: ${characterLock}.` : "",
     styleLock ? `Style lock: ${styleLock}.` : "",
-    "Preserve the exact same face shape, eye design, hair silhouette, outfit layers, outfit colors, body proportions, signature items, line art, lighting, location continuity, and anime style from the first frame.",
-    "Use one clear motion only. Keep movement coherent and physically continuous. Avoid sudden identity changes, face drift, outfit changes, hair changes, color shifts, camera jumps, morphing, flicker, warped hands, duplicated people, or extra characters.",
+    "Preserve the exact same face shape, eye design, hair silhouette, outfit layers, outfit colors, body proportions, signature items, line art, lighting, location continuity, and 2D manga style from the first frame.",
     params.previousScene
-      ? `Continue from previous shot ${params.previousScene.scene_id}: ${compactText(`${params.previousScene.plot || ""} ${params.previousScene.action || ""} ${params.previousScene.emotion || ""} ${params.previousScene.location || ""}`)}. The first 0.5 seconds should visually match the previous final frame before the new motion begins.`
+      ? `Previous shot ${params.previousScene.scene_id} ended as: ${compactText(params.previousScene.ending_state || `${params.previousScene.plot || ""} ${params.previousScene.action || ""} ${params.previousScene.emotion || ""} ${params.previousScene.location || ""}`)}. Continue the character identity and visual style from previous shot without a jump cut.`
       : "This is the opening shot, establish the scene clearly before motion begins.",
+    params.scene?.starting_state ? `First 0.5 seconds must hold this starting state: ${compactText(params.scene.starting_state)}.` : "",
     `Current scene ${params.scene?.scene_id || ""}: ${compactText(`${params.scene?.plot || ""} ${params.scene?.visual_description || ""} ${params.scene?.action || ""} ${params.scene?.emotion || ""} ${params.scene?.location || ""}`)}.`,
+    "Use one clear motion only. Keep movement coherent and physically continuous. Avoid sudden identity changes, face drift, outfit changes, hair changes, color shifts, camera jumps, morphing, flicker, warped hands, duplicated people, extra characters, time jumps, or location resets.",
     currentCamera ? `Camera: ${currentCamera}. Keep the camera motion smooth and restrained.` : "Keep the camera motion smooth and restrained.",
+    params.scene?.ending_state
+      ? `End exactly on this stable state and hold for 0.5 to 1 second: ${compactText(params.scene.ending_state)}.`
+      : "End on a stable final frame suitable for the next shot.",
     params.nextScene
-      ? `End with a stable final frame that can become the first frame of next scene ${params.nextScene.scene_id}: ${compactText(`${params.nextScene.plot || ""} ${params.nextScene.location || ""}`)}. Hold the final composition for 0.5 to 1 second. The final held frame must show every visible character in this shot clearly and completely, with full head, face, hair, outfit, hands, signature item, and body silhouette readable; avoid cropped faces, cut-off heads, off-screen bodies, backs turned to camera, occlusion, motion blur, fade to black, or transition effects.`
-      : "End on a stable final frame suitable for the episode ending. The final held frame must show every visible character clearly and completely, with full head, face, hair, outfit, hands, signature item, and body silhouette readable; avoid cropped faces, cut-off heads, off-screen bodies, backs turned to camera, occlusion, motion blur, fade to black, or transition effects.",
+      ? `The final held frame must be usable as visual reference for next scene ${params.nextScene.scene_id}: ${compactText(params.nextScene.starting_state || params.nextScene.plot)}.`
+      : "The final held frame must be suitable for the episode ending.",
+    "The final held frame must show every visible character clearly and completely, with full head, face, hair, outfit, hands, signature item, and body silhouette readable; avoid cropped faces, cut-off heads, off-screen bodies, backs turned to camera, occlusion, motion blur, fade to black, or transition effects.",
     params.visualStyle?.negative_prompt ? `Negative constraints: ${params.visualStyle.negative_prompt}.` : "",
     params.basePrompt
   ];

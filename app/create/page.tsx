@@ -7,13 +7,15 @@ import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Input, Select, Textarea } from "@/components/ui/field";
 
+const MANGA_STYLE_PRESET = "2D 日系漫画分镜，干净黑色线稿，赛璐璐上色，网点纸纹，漫画面板构图，强制非写实、非3D、非真人";
+
 export default function CreatePage() {
   const router = useRouter();
   const [loading, setLoading] = useState(false);
   const [form, setForm] = useState({
     idea: "生成一个男主被家族背叛，三年后觉醒龙魂归来复仇的动漫短剧，风格要热血、爽、反转多。",
     genre: "热血爽文",
-    style: "高质量日系动漫，电影级光影，细节丰富",
+    style: MANGA_STYLE_PRESET,
     durationSeconds: 60,
     sceneCount: 10,
     aspectRatio: "9:16",
@@ -72,7 +74,13 @@ export default function CreatePage() {
               </div>
               <div>
                 <label className="text-sm font-semibold">画风</label>
-                <Input className="mt-2" value={form.style} onChange={(e) => setForm({ ...form, style: e.target.value })} />
+                <Input
+                  className="mt-2"
+                  value={form.style}
+                  onChange={(e) => setForm({ ...form, style: e.target.value })}
+                  placeholder={MANGA_STYLE_PRESET}
+                />
+                <p className="mt-2 text-xs text-studio-muted">建议保留“非写实、非3D、非真人”，否则视频模型容易跑成电影感真人画面。</p>
               </div>
               <div>
                 <label className="text-sm font-semibold">时长</label>
@@ -86,7 +94,7 @@ export default function CreatePage() {
               <div>
                 <label className="text-sm font-semibold">分镜数</label>
                 <Select className="mt-2" value={form.sceneCount} onChange={(e) => setForm({ ...form, sceneCount: Number(e.target.value) })}>
-                <option value={3}>3 个分镜</option>
+                  <option value={3}>3 个分镜</option>
                   <option value={6}>6 个分镜</option>
                   <option value={10}>10 个分镜</option>
                   <option value={15}>15 个分镜</option>
@@ -121,7 +129,8 @@ export default function CreatePage() {
               {[
                 "故事总导演生成 JSON",
                 "角色一致性 Agent 生成角色卡",
-                "Agnes 生成角色图和关键帧",
+                "Agnes 生成角色定稿图",
+                "每个分镜都生成漫画关键帧",
                 "Agnes 图生视频生成片段",
                 "MiMo 合成旁白和对白",
                 "ffmpeg 合成最终短剧"

@@ -42,43 +42,51 @@ export function createStoryTask(projectId: string, input: ProjectInput) {
 
 export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan) {
   const tasks: AgentTask[] = [];
+  const characterImageTaskIds = new Map<string, string>();
   let previousVideoTask: AgentTask | undefined;
 
   for (const character of plan.characters.filter(isVisualCharacter)) {
-    tasks.push(task({
+    const characterTask = task({
       projectId,
       type: "character.image.generate",
       title: `生成角色定稿图：${character.name}`,
       agent: "character_designer",
       dependsOn: [],
       input: { character, visualStyle: plan.visual_style, aspectRatio: plan.project.aspect_ratio }
-    }));
+    });
+    tasks.push(characterTask);
+    characterImageTaskIds.set(character.name, characterTask.id);
   }
 
   for (const [index, scene] of plan.scenes.entries()) {
-    const dependsOn: string[] = [];
+    const characterDependsOn = (scene.characters_in_scene || [])
+      .map((name) => characterImageTaskIds.get(name))
+      .filter((id): id is string => Boolean(id));
 
-    if (index === 0) {
-      const imageTask = task({
-        projectId,
-        type: "scene.image.generate",
-        title: `生成首帧关键帧：${scene.scene_id}`,
-        agent: "image_operator",
-        dependsOn: [],
-        input: { scene, visualStyle: plan.visual_style, aspectRatio: plan.project.aspect_ratio }
-      });
-      tasks.push(imageTask);
-      dependsOn.push(imageTask.id);
-    }
+    const imageDependsOn = [...new Set(characterDependsOn)];
+    if (previousVideoTask) imageDependsOn.push(previousVideoTask.id);
 
-    if (previousVideoTask) dependsOn.push(previousVideoTask.id);
+    const imageTask = task({
+      projectId,
+      type: "scene.image.generate",
+      title: `生成漫画关键帧：${scene.scene_id}`,
+      agent: "image_operator",
+      dependsOn: imageDependsOn,
+      input: {
+        scene,
+        visualStyle: plan.visual_style,
+        aspectRatio: plan.project.aspect_ratio,
+        continuityMode: index === 0 ? "opening_panel" : "new_panel_after_previous_video"
+      }
+    });
+    tasks.push(imageTask);
 
     const videoTask = task({
       projectId,
       type: "scene.video.generate",
-      title: `生成图生视频片段：${scene.scene_id}`,
+      title: `生成漫画图生视频片段：${scene.scene_id}`,
       agent: "video_operator",
-      dependsOn,
+      dependsOn: [imageTask.id],
       input: { sceneId: scene.scene_id, prompt: scene.video_prompt, duration: scene.duration_seconds, aspectRatio: plan.project.aspect_ratio }
     });
     tasks.push(videoTask);

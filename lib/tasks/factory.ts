@@ -183,7 +183,7 @@ export function createMergeTask(projectId: string, plan: AnimeProjectPlan, tasks
   });
 }
 
-// 兼容旧调用：现在默认只创建“需要确认”的图和配音任务，不提前创建视频任务。
-export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan) {
-  return createReviewGenerationTasks(projectId, plan);
+// 兼容旧调用：story.generate 后不自动创建后续任务，必须由用户在 Studio 确认剧本后再创建。
+export function createGenerationTasks(_projectId: string, _plan: AnimeProjectPlan) {
+  return [];
 }

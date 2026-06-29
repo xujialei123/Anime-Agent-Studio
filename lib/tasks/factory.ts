@@ -72,19 +72,22 @@ function beatToScene(beat: NarrationBeat, existing?: AnimeScene): AnimeScene {
     editing: existing?.editing || { transition: "cut", pace: "narration-driven", text_overlay: subtitleText, special_effects: [] },
     image_url: existing?.image_url,
     video_url: existing?.video_url,
-    audio_url: existing?.audio_url
+    audio_url: existing?.audio_url,
+    image_approved: existing?.image_approved || false
   };
 }
 
-function getProductionScenes(plan: AnimeProjectPlan) {
-  if (!plan.narration_beats?.length) return plan.scenes;
+export function normalizePlanScenes(plan: AnimeProjectPlan) {
+  if (!plan.narration_beats?.length) {
+    plan.scenes = plan.scenes.map((scene) => ({ ...scene, image_approved: scene.image_approved || false }));
+    return plan.scenes;
+  }
 
   const scenesById = new Map(plan.scenes.map((scene) => [scene.scene_id, scene]));
   const scenes = [...plan.narration_beats]
     .sort((a, b) => Number(a.order || 0) - Number(b.order || 0))
     .map((beat) => beatToScene(beat, scenesById.get(beat.scene_id)));
 
-  // 后续 runner 会通过 project.plan.scenes 查找视频、音频和最后一帧，所以这里直接把 scenes 规范化成 beat 粒度。
   plan.scenes = scenes;
   plan.project.scene_count = scenes.length;
   return scenes;
@@ -94,18 +97,17 @@ export function createStoryTask(projectId: string, input: ProjectInput) {
   return task({
     projectId,
     type: "story.generate",
-    title: "生成旁白时间轴、角色和分镜方案",
+    title: "生成可编辑剧本、旁白时间轴和分镜方案",
     agent: "story_director",
     dependsOn: [],
     input: { projectInput: input }
   });
 }
 
-export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan) {
+export function createReviewGenerationTasks(projectId: string, plan: AnimeProjectPlan) {
   const tasks: AgentTask[] = [];
   const characterImageTaskIds = new Map<string, string>();
-  let previousVideoTask: AgentTask | undefined;
-  const scenes = getProductionScenes(plan);
+  const scenes = normalizePlanScenes(plan);
 
   for (const character of plan.characters.filter(isVisualCharacter)) {
     const characterTask = task({
@@ -120,39 +122,25 @@ export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan)
     characterImageTaskIds.set(character.name, characterTask.id);
   }
 
-  for (const [index, scene] of scenes.entries()) {
+  for (const scene of scenes) {
     const characterDependsOn = (scene.characters_in_scene || [])
       .map((name) => characterImageTaskIds.get(name))
       .filter((id): id is string => Boolean(id));
-
-    const imageDependsOn = [...new Set(characterDependsOn)];
-    if (previousVideoTask) imageDependsOn.push(previousVideoTask.id);
 
     const imageTask = task({
       projectId,
       type: "scene.image.generate",
       title: `${scene.beat_id ? "旁白 Beat" : "分镜"} 关键帧：${scene.scene_id}`,
       agent: "image_operator",
-      dependsOn: imageDependsOn,
+      dependsOn: [...new Set(characterDependsOn)],
       input: {
         scene,
         visualStyle: plan.visual_style,
         aspectRatio: plan.project.aspect_ratio,
-        continuityMode: index === 0 ? "opening_panel" : "new_panel_after_previous_video"
+        continuityMode: "review_before_video"
       }
     });
     tasks.push(imageTask);
-
-    const videoTask = task({
-      projectId,
-      type: "scene.video.generate",
-      title: `${scene.beat_id ? "旁白 Beat" : "分镜"} 漫画动效：${scene.scene_id}`,
-      agent: "video_operator",
-      dependsOn: [imageTask.id],
-      input: { sceneId: scene.scene_id, prompt: scene.video_prompt, duration: scene.duration_seconds, aspectRatio: plan.project.aspect_ratio }
-    });
-    tasks.push(videoTask);
-    previousVideoTask = videoTask;
 
     tasks.push(task({
       projectId,
@@ -164,18 +152,38 @@ export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan)
     }));
   }
 
+  return tasks;
+}
+
+export function createVideoTaskForScene(projectId: string, plan: AnimeProjectPlan, sceneId: string, imageTaskId?: string) {
+  const scene = plan.scenes.find((item) => item.scene_id === sceneId);
+  if (!scene) throw new Error(`分镜不存在：${sceneId}`);
+  return task({
+    projectId,
+    type: "scene.video.generate",
+    title: `${scene.beat_id ? "旁白 Beat" : "分镜"} 漫画动效：${scene.scene_id}`,
+    agent: "video_operator",
+    dependsOn: imageTaskId ? [imageTaskId] : [],
+    input: { sceneId: scene.scene_id, prompt: scene.video_prompt, duration: scene.duration_seconds, aspectRatio: plan.project.aspect_ratio }
+  });
+}
+
+export function createMergeTask(projectId: string, plan: AnimeProjectPlan, tasks: AgentTask[]) {
   const mergeDeps = tasks
     .filter((item) => item.type === "scene.video.generate" || item.type === "scene.tts.generate")
     .map((item) => item.id);
 
-  tasks.push(task({
+  return task({
     projectId,
     type: "project.merge",
-    title: "按旁白时间轴合成最终短剧",
+    title: "按确认内容合成最终短剧",
     agent: "render_engineer",
     dependsOn: mergeDeps,
     input: { editingPlan: plan.final_editing_plan }
-  }));
+  });
+}
 
-  return tasks;
+// 兼容旧调用：现在默认只创建“需要确认”的图和配音任务，不提前创建视频任务。
+export function createGenerationTasks(projectId: string, plan: AnimeProjectPlan) {
+  return createReviewGenerationTasks(projectId, plan);
 }
